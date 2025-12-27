@@ -24,7 +24,10 @@ import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -34,6 +37,57 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// Custom lifecycle owner that can delay lifecycle events
+class DelayedLifecycleOwner(private val parent: LifecycleOwner) : LifecycleOwner {
+    private val registry = LifecycleRegistry(this)
+    private var pendingState: Lifecycle.State? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Main)
+    private var delayJob: Job? = null
+    
+    var shouldDelayStop: () -> Boolean = { false }
+    
+    init {
+        parent.lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    // Check if we should delay the STOP event
+                    if (shouldDelayStop()) {
+                        Log.w("ZeroCamera", "Delaying lifecycle STOP due to pending captures")
+                        pendingState = Lifecycle.State.CREATED
+                        scheduleDelayedStop()
+                    } else {
+                        registry.handleLifecycleEvent(event)
+                    }
+                }
+                else -> registry.handleLifecycleEvent(event)
+            }
+        })
+    }
+    
+    private fun scheduleDelayedStop() {
+        delayJob?.cancel()
+        delayJob = coroutineScope.launch {
+            // Poll every 100ms for up to 5 seconds
+            var attempts = 0
+            while (shouldDelayStop() && attempts < 50) {
+                delay(100)
+                attempts++
+            }
+            
+            // Now allow the STOP event
+            if (pendingState == Lifecycle.State.CREATED) {
+                Log.d("ZeroCamera", "Proceeding with delayed lifecycle STOP")
+                registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+                pendingState = null
+            }
+        }
+    }
+    
+    override val lifecycle: Lifecycle
+        get() = registry
+}
 
 class CameraController {
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -44,11 +98,16 @@ class CameraController {
     private var currentRotation: Int = Surface.ROTATION_0
     private var currentOutputFormat: Int = ImageCapture.OUTPUT_FORMAT_JPEG
     private var lifecycleOwner: LifecycleOwner? = null
+    private var delayedLifecycleOwner: DelayedLifecycleOwner? = null
     private var previewView: PreviewView? = null
     private var availableFormats: List<Int> = emptyList()
     private var rebindJob: Job? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     private var flashEnabled: Boolean = false
+    
+    // Track pending capture operations
+    private var pendingCaptureCount = 0
+    private val captureLock = Object()
 
     fun createPreviewView(context: Context): PreviewView {
         this.context = context
@@ -70,6 +129,14 @@ class CameraController {
     ) {
         this.lifecycleOwner = lifecycleOwner
         this.previewView = previewView
+        
+        // Create delayed lifecycle owner that will wait for pending captures
+        if (delayedLifecycleOwner == null) {
+            delayedLifecycleOwner = DelayedLifecycleOwner(lifecycleOwner).apply {
+                shouldDelayStop = { hasPendingCaptures() }
+            }
+        }
+        
         val context = previewView.context
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -156,8 +223,10 @@ class CameraController {
 
             try {
                 cameraProvider.unbindAll()
+                
+                // Use the delayed lifecycle owner to prevent premature unbinding
                 camera = cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
+                    delayedLifecycleOwner!!,
                     cameraSelector,
                     preview,
                     imageCapture
@@ -215,7 +284,11 @@ class CameraController {
             return
         }
 
-        Log.d(TAG, "takePhoto: Starting capture")
+        // Increment pending capture count
+        synchronized(captureLock) {
+            pendingCaptureCount++
+            Log.d(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
+        }
 
         // Determine file extension and MIME type based on format
         val (fileExtension, mimeType) = when (currentOutputFormat) {
@@ -251,11 +324,23 @@ class CameraController {
                     val uri = outputFileResults.savedUri
                     val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
                     Log.d(TAG, "$formatName photo saved: $uri")
+                    
+                    // Decrement pending capture count
+                    synchronized(captureLock) {
+                        pendingCaptureCount--
+                        Log.d(TAG, "Capture completed (pending: $pendingCaptureCount)")
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     Log.e(TAG, "Capture failed", exception)
                     postToast("Capture failed: ${exception.message}")
+                    
+                    // Decrement pending capture count
+                    synchronized(captureLock) {
+                        pendingCaptureCount--
+                        Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
+                    }
                 }
             }
         )
@@ -377,9 +462,23 @@ class CameraController {
         }
     }
     
+    fun hasPendingCaptures(): Boolean {
+        synchronized(captureLock) {
+            return pendingCaptureCount > 0
+        }
+    }
+    
     fun shutdown() {
         orientationEventListener?.disable()
         orientationEventListener = null
+        
+        // Wait for pending captures to complete before shutting down
+        synchronized(captureLock) {
+            if (pendingCaptureCount > 0) {
+                Log.w(TAG, "Shutdown requested with $pendingCaptureCount pending captures")
+            }
+        }
+        
         cameraExecutor.shutdown()
     }
 

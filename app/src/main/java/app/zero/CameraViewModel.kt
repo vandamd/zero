@@ -352,6 +352,10 @@ class CameraViewModel : ViewModel() {
         cameraController.onTapToFocus(x, y, width, height)
     }
     
+    fun hasPendingCaptures(): Boolean {
+        return cameraController.hasPendingCaptures()
+    }
+    
     override fun onCleared() {
         super.onCleared()
         cameraController.shutdown()

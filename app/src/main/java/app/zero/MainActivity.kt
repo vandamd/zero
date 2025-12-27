@@ -3,7 +3,6 @@ package app.zero
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -29,6 +28,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+    
+    override fun onPause() {
+        // Log if there are pending captures when activity is pausing
+        if (viewModel.hasPendingCaptures()) {
+            Log.w("ZeroLifecycle", "Activity pausing with pending captures!")
+        }
+        super.onPause()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
