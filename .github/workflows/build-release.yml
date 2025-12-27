@@ -22,8 +22,6 @@ jobs:
         uses: android-actions/setup-android@v3
       - name: Install Android Build Tools 35.0.0
         run: yes | sdkmanager "build-tools;35.0.0" "platforms;android-35"
-      - name: Add build-tools to PATH
-        run: echo "$ANDROID_SDK_ROOT/build-tools/35.0.0" >> $GITHUB_PATH
       - name: Build release APK
         run: ./gradlew assembleRelease
       - name: Sign APK
@@ -35,6 +33,8 @@ jobs:
           alias: ${{ secrets.ALIAS }}
           keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: 35.0.0
       - name: Extract VERSION from app/build.gradle.kts
         run: |
           VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | sed 's/.*versionName = "\(.*\)".*/\1/')
