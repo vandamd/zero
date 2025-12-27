@@ -112,6 +112,8 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isoValue by viewModel.isoValue.collectAsState()
     val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
+    val outputFormat by viewModel.outputFormat.collectAsState()
+    val flashEnabled by viewModel.flashEnabled.collectAsState()
     
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
@@ -180,7 +182,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                     Box(
                         modifier = Modifier
                             .width(60.dp)
-                            .height(140.dp)
+                            .height(120.dp)
                             .clickable {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.toggleIsoPanel()
@@ -221,13 +223,13 @@ fun CameraContent(viewModel: CameraViewModel) {
                         )
                     }
                     
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     
                     // Shutter speed display
                     Box(
                         modifier = Modifier
                             .width(60.dp)
-                            .height(100.dp)
+                            .height(77.dp)
                             .clickable {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.toggleShutterPanel()
@@ -269,24 +271,23 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             }
 
-            // Bottom section - Mode buttons and Grid toggle
+            // Bottom section - Mode toggle, Format toggle, and Grid toggle
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Auto mode button
+                // Exposure mode toggle (A/M)
                 Box(
                     modifier = Modifier
                         .size(60.dp)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.setExposureMode(CameraViewModel.ExposureMode.AUTO)
+                            viewModel.toggleExposureMode()
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "A",
-                        color = if (exposureMode == CameraViewModel.ExposureMode.AUTO) Color.White
-                            else Color.White.copy(alpha = 0.4f),
+                        text = if (exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
+                        color = Color.White,
                         style = androidx.compose.ui.text.TextStyle(
                             fontSize = 32.sp,
                             fontFamily = publicSans,
@@ -296,20 +297,21 @@ fun CameraContent(viewModel: CameraViewModel) {
                     )
                 }
                 
-                // Manual mode button
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Output format toggle (RAW/JPG)
                 Box(
                     modifier = Modifier
                         .size(60.dp)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.setExposureMode(CameraViewModel.ExposureMode.MANUAL)
+                            viewModel.toggleOutputFormat()
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "M",
-                        color = if (exposureMode == CameraViewModel.ExposureMode.MANUAL) Color.White
-                            else Color.White.copy(alpha = 0.4f),
+                        text = viewModel.getFormatName(outputFormat),
+                        color = Color.White,
                         style = androidx.compose.ui.text.TextStyle(
                             fontSize = 32.sp,
                             fontFamily = publicSans,
@@ -318,6 +320,31 @@ fun CameraContent(viewModel: CameraViewModel) {
                         modifier = Modifier.rotate(90f)
                     )
                 }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Flash toggle
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.toggleFlash()
+                    },
+                    modifier = Modifier.size(60.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (flashEnabled) R.drawable.flash_stroke_rounded
+                            else R.drawable.flash_off_stroke_rounded
+                        ),
+                        contentDescription = "Toggle flash",
+                        tint = Color.Unspecified,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .rotate(90f)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(0.dp))
                 
                 // Grid toggle
                 IconButton(

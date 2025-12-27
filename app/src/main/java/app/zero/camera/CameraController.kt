@@ -29,6 +29,11 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class CameraController {
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -37,6 +42,13 @@ class CameraController {
     private var context: Context? = null
     private var orientationEventListener: OrientationEventListener? = null
     private var currentRotation: Int = Surface.ROTATION_0
+    private var currentOutputFormat: Int = ImageCapture.OUTPUT_FORMAT_JPEG
+    private var lifecycleOwner: LifecycleOwner? = null
+    private var previewView: PreviewView? = null
+    private var availableFormats: List<Int> = emptyList()
+    private var rebindJob: Job? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Main)
+    private var flashEnabled: Boolean = false
 
     fun createPreviewView(context: Context): PreviewView {
         this.context = context
@@ -45,7 +57,9 @@ class CameraController {
         }
     }
 
-    fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
+    fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView, onFormatsAvailable: (List<Int>) -> Unit = {}) {
+        this.lifecycleOwner = lifecycleOwner
+        this.previewView = previewView
         val context = previewView.context
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -71,12 +85,31 @@ class CameraController {
                 return@addListener
             }
 
-            // Check RAW capabilities
+            // Check supported formats
             val capabilities = ImageCapture.getImageCaptureCapabilities(cameraInfo)
-            val supportsRaw = capabilities.supportedOutputFormats.contains(ImageCapture.OUTPUT_FORMAT_RAW)
-
-            Log.d(TAG, "Camera supports RAW: $supportsRaw")
-            Log.d(TAG, "Supported formats: ${capabilities.supportedOutputFormats}")
+            val supportedFormats = capabilities.supportedOutputFormats.toList()
+            
+            // Log all constants and supported formats
+            Log.d(TAG, "Supported formats from device: $supportedFormats")
+            Log.d(TAG, "OUTPUT_FORMAT_JPEG = ${ImageCapture.OUTPUT_FORMAT_JPEG}")
+            Log.d(TAG, "OUTPUT_FORMAT_RAW = ${ImageCapture.OUTPUT_FORMAT_RAW}")
+            
+            // We want RAW and JPEG toggle
+            val supportsRaw = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_RAW)
+            val supportsJpeg = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_JPEG)
+            
+            // Only offer RAW and JPEG as options
+            val workingFormats = mutableListOf<Int>()
+            if (supportsRaw) workingFormats.add(ImageCapture.OUTPUT_FORMAT_RAW)
+            if (supportsJpeg) workingFormats.add(ImageCapture.OUTPUT_FORMAT_JPEG)
+            
+            availableFormats = workingFormats
+            
+            Log.d(TAG, "Available formats: RAW=$supportsRaw, JPEG=$supportsJpeg")
+            Log.d(TAG, "Working formats list: $workingFormats")
+            
+            // Notify callback with available formats
+            onFormatsAvailable(workingFormats)
 
             // Get initial rotation from display
             currentRotation = previewView.display?.rotation ?: Surface.ROTATION_0
@@ -85,14 +118,27 @@ class CameraController {
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setTargetRotation(currentRotation)
 
-            // Set output format to RAW if supported
-            if (supportsRaw) {
-                builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW)
-                Log.d(TAG, "RAW output format enabled")
-            } else {
-                Log.w(TAG, "RAW format not supported, falling back to JPEG")
+            // Use current output format if it's supported, otherwise default to RAW or JPEG
+            if (!workingFormats.contains(currentOutputFormat)) {
+                currentOutputFormat = when {
+                    supportsRaw -> ImageCapture.OUTPUT_FORMAT_RAW
+                    supportsJpeg -> ImageCapture.OUTPUT_FORMAT_JPEG
+                    else -> ImageCapture.OUTPUT_FORMAT_JPEG
+                }
             }
-
+            
+            val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
+            Log.d(TAG, "Using output format: $formatName")
+            
+            builder.setOutputFormat(currentOutputFormat)
+            
+            // Set flash mode based on current state
+            if (flashEnabled) {
+                builder.setFlashMode(ImageCapture.FLASH_MODE_ON)
+            } else {
+                builder.setFlashMode(ImageCapture.FLASH_MODE_OFF)
+            }
+            
             imageCapture = builder.build()
 
             // Set up orientation listener to update rotation
@@ -106,7 +152,7 @@ class CameraController {
                     preview,
                     imageCapture
                 )
-                Log.d(TAG, "Camera bound successfully with rotation: $currentRotation")
+                Log.d(TAG, "Camera bound successfully with rotation: $currentRotation, flash: $flashEnabled")
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -156,16 +202,21 @@ class CameraController {
             return
         }
 
-        Log.d(TAG, "takePhoto: Starting RAW capture")
+        Log.d(TAG, "takePhoto: Starting capture")
 
-        // Prepare file name
+        // Determine file extension and MIME type based on format
+        val (fileExtension, mimeType) = when (currentOutputFormat) {
+            ImageCapture.OUTPUT_FORMAT_RAW -> ".dng" to "image/x-adobe-dng"
+            else -> ".jpg" to "image/jpeg"
+        }
+        
         val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis()) + ".dng"
+            .format(System.currentTimeMillis()) + fileExtension
 
         // Create ContentValues for MediaStore
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
             if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
             }
@@ -178,18 +229,19 @@ class CameraController {
             contentValues
         ).build()
 
-        // Take photo with file-based API (CameraX handles DNG creation internally)
+        // Take photo
         imageCapture.takePicture(
             outputOptions,
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     val uri = outputFileResults.savedUri
-                    Log.d(TAG, "RAW photo saved: $uri")
+                    val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
+                    Log.d(TAG, "$formatName photo saved: $uri")
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    Log.e(TAG, "RAW Capture failed", exception)
+                    Log.e(TAG, "Capture failed", exception)
                     postToast("Capture failed: ${exception.message}")
                 }
             }
@@ -271,6 +323,47 @@ class CameraController {
         Log.d(TAG, "Set manual exposure: ISO=$iso, shutter=${exposureTimeNs}ns")
     }
 
+    fun setOutputFormat(format: Int) {
+        if (!availableFormats.contains(format)) {
+            Log.w(TAG, "Format $format not supported, ignoring")
+            return
+        }
+        
+        if (currentOutputFormat == format) {
+            Log.d(TAG, "Already using format $format, skipping rebind")
+            return
+        }
+        
+        currentOutputFormat = format
+        Log.d(TAG, "Output format will change to: $format")
+        
+        // Cancel any pending rebind
+        rebindJob?.cancel()
+        
+        // Debounce rebind by 500ms to avoid conflicts with ongoing captures
+        rebindJob = coroutineScope.launch {
+            delay(500)
+            val owner = lifecycleOwner
+            val preview = previewView
+            if (owner != null && preview != null) {
+                Log.d(TAG, "Rebinding camera with format $format")
+                bindCamera(owner, preview)
+            }
+        }
+    }
+    
+    fun setFlashEnabled(enabled: Boolean) {
+        flashEnabled = enabled
+        Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
+        
+        // Update flash mode on existing imageCapture if available
+        imageCapture?.flashMode = if (enabled) {
+            ImageCapture.FLASH_MODE_ON
+        } else {
+            ImageCapture.FLASH_MODE_OFF
+        }
+    }
+    
     fun shutdown() {
         orientationEventListener?.disable()
         orientationEventListener = null

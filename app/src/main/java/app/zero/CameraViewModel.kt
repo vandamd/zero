@@ -32,6 +32,10 @@ class CameraViewModel : ViewModel() {
     // Grid overlay toggle
     private val _gridEnabled = MutableStateFlow(false)
     val gridEnabled: StateFlow<Boolean> = _gridEnabled
+    
+    // Flash toggle
+    private val _flashEnabled = MutableStateFlow(false)
+    val flashEnabled: StateFlow<Boolean> = _flashEnabled
 
     // Exposure mode (Auto vs Manual)
     private val _exposureMode = MutableStateFlow(ExposureMode.AUTO)
@@ -53,6 +57,14 @@ class CameraViewModel : ViewModel() {
     // Common values: 1/1000s, 1/500s, 1/250s, 1/125s, 1/60s, 1/30s, 1/15s
     private val _shutterSpeedNs = MutableStateFlow(16_666_666L)  // 1/60s default
     val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs
+    
+    // Output format (RAW or JPEG)
+    private val _outputFormat = MutableStateFlow(2)  // Start with RAW (format 2)
+    val outputFormat: StateFlow<Int> = _outputFormat
+    
+    // Available formats on this device
+    private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
+    val availableFormats: StateFlow<List<Int>> = _availableFormats
 
     // Store screen dimensions for center focus
     private var screenWidth: Float = 0f
@@ -89,6 +101,11 @@ class CameraViewModel : ViewModel() {
     fun toggleGrid() {
         _gridEnabled.value = !_gridEnabled.value
     }
+    
+    fun toggleFlash() {
+        _flashEnabled.value = !_flashEnabled.value
+        cameraController.setFlashEnabled(_flashEnabled.value)
+    }
 
     fun toggleExposurePanel() {
         _sliderMode.value = if (_sliderMode.value == SliderMode.EXPOSURE) {
@@ -114,6 +131,15 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    fun toggleExposureMode() {
+        val newMode = if (_exposureMode.value == ExposureMode.AUTO) {
+            ExposureMode.MANUAL
+        } else {
+            ExposureMode.AUTO
+        }
+        setExposureMode(newMode)
+    }
+    
     fun setExposureMode(mode: ExposureMode) {
         _exposureMode.value = mode
         _sliderMode.value = SliderMode.NONE
@@ -153,7 +179,30 @@ class CameraViewModel : ViewModel() {
     }
 
     fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
-        cameraController.bindCamera(lifecycleOwner, previewView)
+        cameraController.bindCamera(lifecycleOwner, previewView) { formats ->
+            // Receive available formats from camera controller
+            _availableFormats.value = formats
+        }
+    }
+    
+    fun toggleOutputFormat() {
+        val formats = _availableFormats.value
+        if (formats.isEmpty()) return
+        
+        val currentIndex = formats.indexOf(_outputFormat.value)
+        val nextIndex = (currentIndex + 1) % formats.size
+        val newFormat = formats[nextIndex]
+        
+        _outputFormat.value = newFormat
+        cameraController.setOutputFormat(newFormat)
+    }
+    
+    fun getFormatName(format: Int): String {
+        return when (format) {
+            0 -> "JPG"
+            2 -> "RAW"
+            else -> "???"
+        }
     }
 
     fun onShutterButtonPress() {
