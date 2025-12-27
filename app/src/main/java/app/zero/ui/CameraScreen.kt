@@ -141,7 +141,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.toggleExposurePanel()
                             }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 0.dp)
                     ) {
                         Icon(
                             painter = painterResource(id = R.drawable.exposure_stroke_rounded),
