@@ -180,7 +180,6 @@ class CameraController {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     val uri = outputFileResults.savedUri
                     Log.d(TAG, "RAW photo saved: $uri")
-                    postToast("RAW photo saved")
                 }
 
                 override fun onError(exception: ImageCaptureException) {
