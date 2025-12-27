@@ -20,6 +20,17 @@ class CameraViewModel : ViewModel() {
     private val _crosshairPosition = MutableStateFlow<Pair<Float, Float>?>(null)
     val crosshairPosition: StateFlow<Pair<Float, Float>?> = _crosshairPosition
 
+    // Grid overlay toggle
+    private val _gridEnabled = MutableStateFlow(false)
+    val gridEnabled: StateFlow<Boolean> = _gridEnabled
+
+    // Exposure compensation
+    private val _exposureExpanded = MutableStateFlow(false)
+    val exposureExpanded: StateFlow<Boolean> = _exposureExpanded
+
+    private val _exposureValue = MutableStateFlow(0f)  // -2.0 to +2.0 EV
+    val exposureValue: StateFlow<Float> = _exposureValue
+
     // Store screen dimensions for center focus
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
@@ -39,6 +50,23 @@ class CameraViewModel : ViewModel() {
     fun setScreenDimensions(width: Float, height: Float) {
         screenWidth = width
         screenHeight = height
+    }
+
+    fun toggleGrid() {
+        _gridEnabled.value = !_gridEnabled.value
+    }
+
+    fun toggleExposurePanel() {
+        _exposureExpanded.value = !_exposureExpanded.value
+    }
+
+    fun setExposureValue(ev: Float) {
+        _exposureValue.value = ev.coerceIn(-2f, 2f)
+        cameraController.setExposureCompensation(ev)
+    }
+
+    fun closeAllPanels() {
+        _exposureExpanded.value = false
     }
 
     fun createPreviewView(context: Context): PreviewView {

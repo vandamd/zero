@@ -217,6 +217,22 @@ class CameraController {
         cameraControl.startFocusAndMetering(action)
     }
 
+    fun setExposureCompensation(ev: Float) {
+        val cameraControl = camera?.cameraControl ?: return
+        val cameraInfo = camera?.cameraInfo ?: return
+
+        // Get exposure compensation range and step
+        val exposureState = cameraInfo.exposureState
+        val range = exposureState.exposureCompensationRange
+        val step = exposureState.exposureCompensationStep
+
+        // Convert EV to index (EV / step)
+        val index = (ev / step.toFloat()).toInt().coerceIn(range.lower, range.upper)
+
+        cameraControl.setExposureCompensationIndex(index)
+        Log.d(TAG, "Set exposure compensation: EV=$ev, index=$index")
+    }
+
     fun shutdown() {
         orientationEventListener?.disable()
         orientationEventListener = null
