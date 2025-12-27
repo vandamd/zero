@@ -82,7 +82,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
             add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
-    
+
     val permissionsState = rememberMultiplePermissionsState(
         permissions = permissions
     )
@@ -116,18 +116,16 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
-    
+
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
     )
-    
-    // Override density to disable font scaling - makes all sizes constant
+
     val density = LocalDensity.current
     val fixedDensity = Density(density.density, fontScale = 0.85f)
 
     CompositionLocalProvider(LocalDensity provides fixedDensity) {
     Row(modifier = Modifier.fillMaxSize()) {
-        // Left toolbar (fixed width)
         Column(
             modifier = Modifier
                 .width(60.dp)
@@ -135,13 +133,10 @@ fun CameraContent(viewModel: CameraViewModel) {
                 .background(Color.Black),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Top section - Mode-dependent controls
             Column(
                 modifier = Modifier.padding(top = 16.dp)
             ) {
-                // Auto mode: Show exposure compensation
                 if (exposureMode == CameraViewModel.ExposureMode.AUTO) {
-                    // Exposure icon and value group
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -162,9 +157,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                                 .size(32.dp)
                                 .rotate(90f)
                         )
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         Text(
                             text = when {
                                 exposureValue == 0f -> "0.0"
@@ -182,7 +177,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                         )
                     }
                 }
-                
+
                 // Manual mode: Show ISO and Shutter Speed
                 if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
                     // ISO label and value combined
@@ -229,10 +224,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                                 )
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(8.dp))
-                    
-                    // Shutter speed display
+
                     Box(
                         modifier = Modifier
                             .width(60.dp)
@@ -278,11 +272,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             }
 
-            // Bottom section - Mode toggle, Format toggle, and Grid toggle
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Exposure mode toggle (A/M)
                 Box(
                     modifier = Modifier
                         .size(60.dp)
@@ -303,10 +295,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                         modifier = Modifier.rotate(90f)
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
-                // Output format toggle (RAW/JPG)
+
                 Box(
                     modifier = Modifier
                         .size(60.dp)
@@ -327,10 +318,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                         modifier = Modifier.rotate(90f)
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
-                // Flash toggle
+
                 IconButton(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -350,10 +340,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                             .rotate(90f)
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(0.dp))
-                
-                // Grid toggle
+
                 IconButton(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -376,7 +365,6 @@ fun CameraContent(viewModel: CameraViewModel) {
             }
         }
 
-        // Camera preview area
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -385,7 +373,6 @@ fun CameraContent(viewModel: CameraViewModel) {
                     viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
                 }
         ) {
-            // Camera preview
             AndroidView(
                 factory = { ctx ->
                     viewModel.createPreviewView(ctx)
@@ -402,7 +389,6 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             )
 
-            // Focus crosshair indicator
             crosshairPosition?.let { (x, y) ->
                 val density = LocalDensity.current
                 val crosshairSizePx = with(density) { 80.dp.toPx() }
@@ -412,77 +398,27 @@ fun CameraContent(viewModel: CameraViewModel) {
                         x = with(density) { (x - crosshairSizePx / 2f).toDp() },
                         y = with(density) { (y - crosshairSizePx / 2f).toDp() }
                     )
-                )
-            }
-
-            // Grid overlay (rule of thirds)
-            if (gridEnabled) {
-                GridOverlay()
-            }
-
-            // Slider (overlaid on top of viewfinder) - changes based on mode
-            when (sliderMode) {
-                CameraViewModel.SliderMode.EXPOSURE -> {
-                    ExposureSlider(
-                        value = exposureValue,
-                        onValueChange = { viewModel.setExposureValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
                     )
                 }
-                CameraViewModel.SliderMode.ISO -> {
-                    IsoSlider(
-                        value = isoValue,
-                        onValueChange = { viewModel.setIsoValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.SHUTTER -> {
-                    ShutterSpeedSlider(
-                        value = shutterSpeedNs,
-                        onValueChange = { viewModel.setShutterSpeed(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.NONE -> {}
-            }
 
-            // Shutter flash effect
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showFlash,
-                enter = fadeIn(animationSpec = tween(50)),
-                exit = fadeOut(animationSpec = tween(100))
-            ) {
-                Box(
+                if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
+                    Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black)
                 )
             }
 
-            // Auto-reset flash after showing
             LaunchedEffect(showFlash) {
                 if (showFlash) {
-                    delay(50) // Flash duration
+                    delay(50)
                     viewModel.resetShutterFlash()
                 }
             }
 
-            // Auto-hide crosshair after delay (only if not holding focus button)
             LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
                 if (crosshairPosition != null && !isFocusButtonHeld) {
-                    delay(2000) // Show for 2 seconds
+                    delay(2000)
                     viewModel.hideCrosshair()
                 }
             }
@@ -497,7 +433,7 @@ fun Crosshair(modifier: Modifier = Modifier) {
         modifier = modifier.size(80.dp)
     ) {
         val strokeWidth = 2f
-        val notchLength = 10f // Length of the notch lines
+        val notchLength = 10f
 
         val left = 0f
         val top = 0f
@@ -506,7 +442,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
         val centerX = size.width / 2f
         val centerY = size.height / 2f
 
-        // Top edge
         drawLine(
             color = Color.White,
             start = Offset(left, top),
@@ -514,7 +449,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Right edge
         drawLine(
             color = Color.White,
             start = Offset(right, top),
@@ -522,7 +456,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Bottom edge
         drawLine(
             color = Color.White,
             start = Offset(right, bottom),
@@ -530,7 +463,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Left edge
         drawLine(
             color = Color.White,
             start = Offset(left, bottom),
@@ -538,7 +470,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Top notch (vertical line pointing down)
         drawLine(
             color = Color.White,
             start = Offset(centerX, top),
@@ -546,7 +477,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Bottom notch (vertical line pointing up)
         drawLine(
             color = Color.White,
             start = Offset(centerX, bottom),
@@ -554,7 +484,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Left notch (horizontal line pointing right)
         drawLine(
             color = Color.White,
             start = Offset(left, centerY),
@@ -562,7 +491,6 @@ fun Crosshair(modifier: Modifier = Modifier) {
             strokeWidth = strokeWidth
         )
 
-        // Right notch (horizontal line pointing left)
         drawLine(
             color = Color.White,
             start = Offset(right, centerY),
@@ -578,11 +506,9 @@ fun GridOverlay() {
         val strokeWidth = 3f
         val gridColor = Color.White
 
-        // Rule of thirds - divide into 3x3 grid
         val thirdWidth = size.width / 3f
         val thirdHeight = size.height / 3f
 
-        // Vertical lines (2 lines at 1/3 and 2/3)
         drawLine(
             color = gridColor,
             start = Offset(thirdWidth, 0f),
@@ -596,7 +522,6 @@ fun GridOverlay() {
             strokeWidth = strokeWidth
         )
 
-        // Horizontal lines (2 lines at 1/3 and 2/3)
         drawLine(
             color = gridColor,
             start = Offset(0f, thirdHeight),
@@ -620,16 +545,14 @@ fun ExposureSlider(
 ) {
     val haptic = LocalHapticFeedback.current
     var lastSnappedValue by remember { mutableStateOf(value) }
-    
+
     Canvas(
         modifier = modifier
             .pointerInput(Unit) {
                 detectDragGestures { change, _ ->
                     change.consume()
-                    // Convert drag position to value (-2 to +2)
                     val fraction = change.position.x / size.width
                     val rawValue = (-2f + (fraction * 4f)).coerceIn(-2f, 2f)
-                    // Snap to nearest 0.5 increment
                     val snappedValue = (kotlin.math.round(rawValue * 2f) / 2f).coerceIn(-2f, 2f)
                     if (snappedValue != lastSnappedValue) {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -640,10 +563,8 @@ fun ExposureSlider(
             }
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
-                    // Convert tap position to value (-2 to +2)
                     val fraction = offset.x / size.width
                     val rawValue = (-2f + (fraction * 4f)).coerceIn(-2f, 2f)
-                    // Snap to nearest 0.5 increment
                     val snappedValue = (kotlin.math.round(rawValue * 2f) / 2f).coerceIn(-2f, 2f)
                     if (snappedValue != lastSnappedValue) {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -659,7 +580,6 @@ fun ExposureSlider(
         val notchLength = 16f
         val trackColor = Color.White
 
-        // Main horizontal track line
         drawLine(
             color = trackColor,
             start = Offset(0f, centerY),
@@ -667,13 +587,11 @@ fun ExposureSlider(
             strokeWidth = trackStrokeWidth
         )
 
-        // Draw notches for each EV step (-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2)
         val evSteps = listOf(-2f, -1.5f, -1f, -0.5f, 0f, 0.5f, 1f, 1.5f, 2f)
         evSteps.forEach { ev ->
-            val normalizedValue = (ev + 2f) / 4f  // 0 to 1 (left to right)
+            val normalizedValue = (ev + 2f) / 4f
             val notchX = normalizedValue * size.width
 
-            // Longer notch for whole numbers, extra long for 0
             val length = when {
                 ev == 0f -> notchLength * 2.2f
                 ev % 1f == 0f -> notchLength * 1.8f
@@ -688,11 +606,9 @@ fun ExposureSlider(
             )
         }
 
-        // Calculate thumb position (left = -2, right = +2)
-        val normalizedValue = (value + 2f) / 4f  // 0 to 1
+        val normalizedValue = (value + 2f) / 4f
         val thumbX = normalizedValue * size.width
 
-        // Thumb indicator (vertical line) - white for grabbing
         drawLine(
             color = Color.White,
             start = Offset(thumbX, 0f),
@@ -710,32 +626,26 @@ fun IsoSlider(
 ) {
     val haptic = LocalHapticFeedback.current
     var lastSnappedValue by remember { mutableStateOf(value) }
-    
-    // Logarithmic scale mapping
+
     fun positionToIso(position: Float): Int {
-        // ISO = 100 * 2^(position * 5)
-        // Range: 100 to 3200 (100, 200, 400, 800, 1600, 3200)
         val logValue = 100 * 2.0.pow((position * 5).toDouble())
         return logValue.toInt().coerceIn(100, 3200)
     }
-    
+
     fun isoToPosition(iso: Int): Float {
-        // position = log2(iso/100) / 5
         val position = log2(iso / 100.0) / 5.0
         return position.toFloat().coerceIn(0f, 1f)
     }
-    
     fun snapToNearestIso(iso: Int): Int {
         val validIsos = listOf(100, 200, 400, 800, 1600, 3200)
         return validIsos.minByOrNull { abs(it - iso) } ?: 400
     }
-    
+
     Canvas(
         modifier = modifier
             .pointerInput(Unit) {
                 detectDragGestures { change, _ ->
                     change.consume()
-                    // Convert drag position to ISO value using logarithmic scale
                     val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
                     val rawValue = positionToIso(fraction)
                     val snappedValue = snapToNearestIso(rawValue)
@@ -748,7 +658,6 @@ fun IsoSlider(
             }
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
-                    // Convert tap position to ISO value using logarithmic scale
                     val fraction = (offset.x / size.width).coerceIn(0f, 1f)
                     val rawValue = positionToIso(fraction)
                     val snappedValue = snapToNearestIso(rawValue)
@@ -766,7 +675,6 @@ fun IsoSlider(
         val notchLength = 16f
         val trackColor = Color.White
 
-        // Main horizontal track line
         drawLine(
             color = trackColor,
             start = Offset(0f, centerY),
@@ -774,15 +682,13 @@ fun IsoSlider(
             strokeWidth = trackStrokeWidth
         )
 
-        // Draw notches for ISO steps (100, 200, 400, 800, 1600, 3200)
         val isoSteps = listOf(100, 200, 400, 800, 1600, 3200)
         isoSteps.forEach { iso ->
             val normalizedValue = isoToPosition(iso)
             val notchX = normalizedValue * size.width
 
-            // Longer notch for common values (400, 800, 1600)
             val length = when (iso) {
-                400 -> notchLength * 2.2f  // Extra long for 400 (standard/default)
+                400 -> notchLength * 2.2f
                 800, 1600 -> notchLength * 1.8f
                 else -> notchLength
             }
@@ -795,11 +701,9 @@ fun IsoSlider(
             )
         }
 
-        // Calculate thumb position using logarithmic scale
         val normalizedValue = isoToPosition(value)
         val thumbX = normalizedValue * size.width
 
-        // Thumb indicator (vertical line) - white for grabbing
         drawLine(
             color = Color.White,
             start = Offset(thumbX, 0f),
@@ -809,7 +713,6 @@ fun IsoSlider(
     }
 }
 
-// Helper function to format shutter speed for display
 fun formatShutterSpeed(ns: Long): String {
     val seconds = ns / 1_000_000_000.0
     return when {
@@ -826,37 +729,35 @@ fun ShutterSpeedSlider(
 ) {
     val haptic = LocalHapticFeedback.current
     var lastSnappedValue by remember { mutableStateOf(value) }
-    
-    // Shutter speeds in nanoseconds (1/1000s to 1s)
-    // 1/1000, 1/500, 1/250, 1/125, 1/60, 1/30, 1/15, 1/8, 1/4, 1/2, 1s
+
     val shutterSpeeds = listOf(
-        1_000_000L,      // 1/1000s
-        2_000_000L,      // 1/500s
-        4_000_000L,      // 1/250s
-        8_000_000L,      // 1/125s
-        16_666_666L,     // 1/60s
-        33_333_333L,     // 1/30s
-        66_666_666L,     // 1/15s
-        125_000_000L,    // 1/8s
-        250_000_000L,    // 1/4s
-        500_000_000L,    // 1/2s
-        1_000_000_000L   // 1s
+        1_000_000L,
+        2_000_000L,
+        4_000_000L,
+        8_000_000L,
+        16_666_666L,
+        33_333_333L,
+        66_666_666L,
+        125_000_000L,
+        250_000_000L,
+        500_000_000L,
+        1_000_000_000L
     )
-    
+
     fun positionToShutter(position: Float): Long {
         val index = (position * (shutterSpeeds.size - 1)).toInt().coerceIn(0, shutterSpeeds.size - 1)
         return shutterSpeeds[index]
     }
-    
+
     fun shutterToPosition(shutter: Long): Float {
         val index = shutterSpeeds.indexOfFirst { it >= shutter }.takeIf { it >= 0 } ?: (shutterSpeeds.size - 1)
         return index.toFloat() / (shutterSpeeds.size - 1)
     }
-    
+
     fun snapToNearestShutter(ns: Long): Long {
         return shutterSpeeds.minByOrNull { abs(it - ns) } ?: 16_666_666L
     }
-    
+
     Canvas(
         modifier = modifier
             .pointerInput(Unit) {
@@ -891,7 +792,6 @@ fun ShutterSpeedSlider(
         val notchLength = 16f
         val trackColor = Color.White
 
-        // Main horizontal track line
         drawLine(
             color = trackColor,
             start = Offset(0f, centerY),
@@ -899,15 +799,13 @@ fun ShutterSpeedSlider(
             strokeWidth = trackStrokeWidth
         )
 
-        // Draw notches for shutter speed steps
         shutterSpeeds.forEachIndexed { index, speed ->
             val normalizedValue = index.toFloat() / (shutterSpeeds.size - 1)
             val notchX = normalizedValue * size.width
 
-            // Longer notch for common values (1/60, 1/125)
             val length = when (speed) {
-                16_666_666L -> notchLength * 2.2f  // 1/60s - common default
-                8_000_000L, 33_333_333L -> notchLength * 1.8f  // 1/125s, 1/30s
+                16_666_666L -> notchLength * 2.2f
+                8_000_000L, 33_333_333L -> notchLength * 1.8f
                 else -> notchLength
             }
 
@@ -919,11 +817,9 @@ fun ShutterSpeedSlider(
             )
         }
 
-        // Calculate thumb position
         val normalizedValue = shutterToPosition(value)
         val thumbX = normalizedValue * size.width
 
-        // Thumb indicator (vertical line)
         drawLine(
             color = Color.White,
             start = Offset(thumbX, 0f),

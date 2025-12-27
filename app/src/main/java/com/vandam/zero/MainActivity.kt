@@ -17,10 +17,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Initialize settings early so UI shows correct values
+
         viewModel.initialize(this)
-        
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -29,9 +28,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
+
     override fun onPause() {
-        // Log if there are pending captures when activity is pausing
         if (viewModel.hasPendingCaptures()) {
             Log.w("ZeroLifecycle", "Activity pausing with pending captures!")
         }
@@ -42,10 +40,8 @@ class MainActivity : ComponentActivity() {
         Log.d("ZeroKeys", "KeyDown: $keyCode")
         return when (keyCode) {
             KeyEvent.KEYCODE_CAMERA -> {
-                // Only trigger on initial press, not repeats
                 if (event?.repeatCount == 0) {
                     Log.d("ZeroKeys", "Camera Button Pressed")
-                    // Toast.makeText(this, "Shutter Pressed", Toast.LENGTH_SHORT).show()
                     viewModel.onShutterButtonPress()
                 }
                 true

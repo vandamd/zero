@@ -18,65 +18,46 @@ class CameraViewModel : ViewModel() {
     private val _shutterFlash = MutableStateFlow(false)
     val shutterFlash: StateFlow<Boolean> = _shutterFlash
 
-    // Crosshair position (null = hidden, Pair = x,y coordinates in pixels)
     private val _crosshairPosition = MutableStateFlow<Pair<Float, Float>?>(null)
     val crosshairPosition: StateFlow<Pair<Float, Float>?> = _crosshairPosition
-    
-    // Last focus point - used to remember where user focused
+
     private var lastFocusPoint: Pair<Float, Float>? = null
     private var lastFocusTimestamp: Long = 0
-    private val focusMemoryTimeoutMs: Long = 5000 // Reset to center after 5 seconds of inactivity
-    
-    // Track if focus button is currently held down
+    private val focusMemoryTimeoutMs: Long = 5000
+
     private val _isFocusButtonHeld = MutableStateFlow(false)
     val isFocusButtonHeld: StateFlow<Boolean> = _isFocusButtonHeld
 
-    // Grid overlay toggle - will be initialized from prefs
     private val _gridEnabled = MutableStateFlow(false)
     val gridEnabled: StateFlow<Boolean> = _gridEnabled
-    
-    // Flash toggle - will be initialized from prefs
+
     private val _flashEnabled = MutableStateFlow(false)
     val flashEnabled: StateFlow<Boolean> = _flashEnabled
 
-    // Exposure mode (Auto vs Manual) - will be initialized from prefs
     private val _exposureMode = MutableStateFlow(ExposureMode.AUTO)
     val exposureMode: StateFlow<ExposureMode> = _exposureMode
 
-    // Active slider mode
     private val _sliderMode = MutableStateFlow<SliderMode>(SliderMode.NONE)
     val sliderMode: StateFlow<SliderMode> = _sliderMode
 
-    // Exposure compensation (Auto mode) - will be initialized from prefs
-    private val _exposureValue = MutableStateFlow(0f)  // -2.0 to +2.0 EV
+    private val _exposureValue = MutableStateFlow(0f)
     val exposureValue: StateFlow<Float> = _exposureValue
 
-    // ISO (Manual mode) - will be initialized from prefs
-    private val _isoValue = MutableStateFlow(400)  // 100 to 3200
+    private val _isoValue = MutableStateFlow(400)
     val isoValue: StateFlow<Int> = _isoValue
 
-    // Shutter speed in nanoseconds (Manual mode) - will be initialized from prefs
-    // Common values: 1/1000s, 1/500s, 1/250s, 1/125s, 1/60s, 1/30s, 1/15s
-    private val _shutterSpeedNs = MutableStateFlow(16_666_666L)  // 1/60s default
+    private val _shutterSpeedNs = MutableStateFlow(16_666_666L)
     val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs
-    
-    // Output format (RAW or JPEG) - will be initialized from prefs
-    private val _outputFormat = MutableStateFlow(2)  // Start with RAW (format 2)
+
+    private val _outputFormat = MutableStateFlow(2)
     val outputFormat: StateFlow<Int> = _outputFormat
-    
-    // Available formats on this device
+
     private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
     val availableFormats: StateFlow<List<Int>> = _availableFormats
-    
-    init {
-        // Settings will be loaded synchronously before UI renders
-    }
 
-    // Store screen dimensions for center focus
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
-    
-    // Debounce for shutter button
+
     private var lastShotTimestamp: Long = 0
 
     enum class ExposureMode {
@@ -108,7 +89,7 @@ class CameraViewModel : ViewModel() {
         _gridEnabled.value = !_gridEnabled.value
         saveSettings()
     }
-    
+
     fun toggleFlash() {
         _flashEnabled.value = !_flashEnabled.value
         cameraController.setFlashEnabled(_flashEnabled.value)
@@ -147,18 +128,15 @@ class CameraViewModel : ViewModel() {
         }
         setExposureMode(newMode)
     }
-    
+
     fun setExposureMode(mode: ExposureMode) {
         _exposureMode.value = mode
         _sliderMode.value = SliderMode.NONE
-        
+
         if (mode == ExposureMode.AUTO) {
-            // Re-enable auto exposure
             cameraController.setAutoExposure(true)
-            // Re-apply exposure compensation
             cameraController.setExposureCompensation(_exposureValue.value)
         } else {
-            // Apply current manual settings
             cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         }
         saveSettings()
@@ -192,20 +170,19 @@ class CameraViewModel : ViewModel() {
             loadSettings()
         }
     }
-    
+
     private fun loadSettings() {
         prefs?.let { p ->
-            // Load all settings synchronously before UI renders
             _gridEnabled.value = p.getBoolean("grid_enabled", false)
             _flashEnabled.value = p.getBoolean("flash_enabled", false)
             _exposureMode.value = ExposureMode.valueOf(p.getString("exposure_mode", "AUTO") ?: "AUTO")
             _exposureValue.value = p.getFloat("exposure_value", 0f)
             _isoValue.value = p.getInt("iso_value", 400)
             _shutterSpeedNs.value = p.getLong("shutter_speed_ns", 16_666_666L)
-            _outputFormat.value = p.getInt("output_format", 2) // Default to RAW
+            _outputFormat.value = p.getInt("output_format", 2)
         }
     }
-    
+
     private fun saveSettings() {
         prefs?.edit()?.apply {
             putBoolean("grid_enabled", _gridEnabled.value)
@@ -218,25 +195,22 @@ class CameraViewModel : ViewModel() {
             apply()
         }
     }
-    
+
     fun createPreviewView(context: Context): PreviewView {
         return cameraController.createPreviewView(context)
     }
 
     fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
-        // Set initial settings before binding so they're used during camera setup
         cameraController.setInitialOutputFormat(_outputFormat.value)
         cameraController.setFlashEnabled(_flashEnabled.value)
-        
+
         cameraController.bindCamera(
-            lifecycleOwner, 
+            lifecycleOwner,
             previewView,
             onFormatsAvailable = { formats ->
-                // Receive available formats from camera controller
                 _availableFormats.value = formats
             },
             onCameraReady = {
-                // Apply exposure settings after camera is bound and ready
                 if (_exposureMode.value == ExposureMode.AUTO) {
                     cameraController.setAutoExposure(true)
                     cameraController.setExposureCompensation(_exposureValue.value)
@@ -246,20 +220,20 @@ class CameraViewModel : ViewModel() {
             }
         )
     }
-    
+
     fun toggleOutputFormat() {
         val formats = _availableFormats.value
         if (formats.isEmpty()) return
-        
+
         val currentIndex = formats.indexOf(_outputFormat.value)
         val nextIndex = (currentIndex + 1) % formats.size
         val newFormat = formats[nextIndex]
-        
+
         _outputFormat.value = newFormat
         cameraController.setOutputFormat(newFormat)
         saveSettings()
     }
-    
+
     fun getFormatName(format: Int): String {
         return when (format) {
             0 -> "JPG"
@@ -269,93 +243,74 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onShutterButtonPress() {
-        // Debounce: prevent rapid-fire shots based on exposure settings
         val currentTime = System.currentTimeMillis()
         val minDelayMs = calculateMinimumShotDelay()
-        
+
         if (currentTime - lastShotTimestamp < minDelayMs) {
-            // Too soon, ignore this press
             return
         }
         lastShotTimestamp = currentTime
-        
-        // Taking a photo counts as activity - keep focus point alive
         lastFocusTimestamp = currentTime
-        
-        // Trigger flash immediately on button press
+
         _shutterFlash.value = true
 
         viewModelScope.launch {
             cameraController.takePhoto()
         }
     }
-    
+
     private fun calculateMinimumShotDelay(): Long {
         return when (_exposureMode.value) {
             ExposureMode.MANUAL -> {
-                // In manual mode, use shutter speed + 50% buffer
                 val shutterSpeedMs = _shutterSpeedNs.value / 1_000_000
-                (shutterSpeedMs * 1.5).toLong().coerceAtLeast(200) // At least 200ms
+                (shutterSpeedMs * 1.5).toLong().coerceAtLeast(200)
             }
             ExposureMode.AUTO -> {
-                // In auto mode, use a reasonable default (camera decides exposure)
-                // Allow faster shooting since we don't know the actual exposure time
-                300L // 300ms minimum in auto mode
+                300L
             }
         }
     }
 
     fun onFocusButtonPress() {
         _isFocusButtonHeld.value = true
-        
-        // Check if focus memory has expired
+
         val currentTime = System.currentTimeMillis()
         if (lastFocusPoint != null && currentTime - lastFocusTimestamp > focusMemoryTimeoutMs) {
-            // Timeout expired, reset to center
             lastFocusPoint = null
         }
-        
-        // Use the last focus point if available, otherwise focus at center
+
         val (focusX, focusY) = if (lastFocusPoint != null) {
             lastFocusPoint!!
         } else if (screenWidth > 0 && screenHeight > 0) {
             val centerX = screenWidth / 2f
             val centerY = screenHeight / 2f
-            // Remember center as the focus point for future half-presses
             lastFocusPoint = Pair(centerX, centerY)
             Pair(centerX, centerY)
         } else {
-            return // Can't focus without dimensions
+            return
         }
-        
-        // Update timestamp to keep focus point alive
+
         lastFocusTimestamp = currentTime
-        
-        // Show crosshair while focus button is held
         showCrosshair(focusX, focusY)
-        
-        // Trigger focus at the remembered point
         cameraController.onTapToFocus(focusX, focusY, screenWidth, screenHeight)
     }
 
     fun onFocusButtonRelease() {
         _isFocusButtonHeld.value = false
-        // Hide crosshair when focus button is released
         hideCrosshair()
     }
 
     fun onTapToFocus(x: Float, y: Float, width: Float, height: Float) {
-        // Remember this focus point for later use (e.g., when half-pressing shutter)
         lastFocusPoint = Pair(x, y)
         lastFocusTimestamp = System.currentTimeMillis()
         showCrosshair(x, y)
         cameraController.onTapToFocus(x, y, width, height)
     }
-    
+
     fun hasPendingCaptures(): Boolean {
         return cameraController.hasPendingCaptures()
     }
-    
+
     override fun onCleared() {
         super.onCleared()
         cameraController.shutdown()

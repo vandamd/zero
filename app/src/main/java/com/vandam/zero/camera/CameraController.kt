@@ -39,20 +39,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// Custom lifecycle owner that can delay lifecycle events
 class DelayedLifecycleOwner(private val parent: LifecycleOwner) : LifecycleOwner {
     private val registry = LifecycleRegistry(this)
     private var pendingState: Lifecycle.State? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     private var delayJob: Job? = null
-    
+
     var shouldDelayStop: () -> Boolean = { false }
-    
+
     init {
         parent.lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_STOP -> {
-                    // Check if we should delay the STOP event
                     if (shouldDelayStop()) {
                         Log.w("ZeroCamera", "Delaying lifecycle STOP due to pending captures")
                         pendingState = Lifecycle.State.CREATED
@@ -65,18 +63,16 @@ class DelayedLifecycleOwner(private val parent: LifecycleOwner) : LifecycleOwner
             }
         })
     }
-    
+
     private fun scheduleDelayedStop() {
         delayJob?.cancel()
         delayJob = coroutineScope.launch {
-            // Poll every 100ms for up to 5 seconds
             var attempts = 0
             while (shouldDelayStop() && attempts < 50) {
                 delay(100)
                 attempts++
             }
-            
-            // Now allow the STOP event
+
             if (pendingState == Lifecycle.State.CREATED) {
                 Log.d("ZeroCamera", "Proceeding with delayed lifecycle STOP")
                 registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -84,7 +80,7 @@ class DelayedLifecycleOwner(private val parent: LifecycleOwner) : LifecycleOwner
             }
         }
     }
-    
+
     override val lifecycle: Lifecycle
         get() = registry
 }
@@ -104,8 +100,7 @@ class CameraController {
     private var rebindJob: Job? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     private var flashEnabled: Boolean = false
-    
-    // Track pending capture operations
+
     private var pendingCaptureCount = 0
     private val captureLock = Object()
 
@@ -115,29 +110,27 @@ class CameraController {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
-    
+
     fun setInitialOutputFormat(format: Int) {
         currentOutputFormat = format
         Log.d(TAG, "Initial output format set to: $format")
     }
 
     fun bindCamera(
-        lifecycleOwner: LifecycleOwner, 
-        previewView: PreviewView, 
+        lifecycleOwner: LifecycleOwner,
+        previewView: PreviewView,
         onFormatsAvailable: (List<Int>) -> Unit = {},
         onCameraReady: () -> Unit = {}
     ) {
         this.lifecycleOwner = lifecycleOwner
         this.previewView = previewView
-        
-        // Create delayed lifecycle owner that will wait for pending captures
+
         if (delayedLifecycleOwner == null) {
             delayedLifecycleOwner = DelayedLifecycleOwner(lifecycleOwner).apply {
                 shouldDelayStop = { hasPendingCaptures() }
             }
         }
-        
-        // Observe lifecycle to enable/disable orientation listener
+
         lifecycleOwner.lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
@@ -151,7 +144,7 @@ class CameraController {
                 else -> {}
             }
         })
-        
+
         val context = previewView.context
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -166,7 +159,6 @@ class CameraController {
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-            // Get camera info to check capabilities
             val availableCameras = cameraProvider.availableCameraInfos.filter { cameraInfo ->
                 cameraSelector.filter(listOf(cameraInfo)).isNotEmpty()
             }
@@ -177,40 +169,33 @@ class CameraController {
                 return@addListener
             }
 
-            // Check supported formats
             val capabilities = ImageCapture.getImageCaptureCapabilities(cameraInfo)
             val supportedFormats = capabilities.supportedOutputFormats.toList()
-            
-            // Log all constants and supported formats
+
             Log.d(TAG, "Supported formats from device: $supportedFormats")
             Log.d(TAG, "OUTPUT_FORMAT_JPEG = ${ImageCapture.OUTPUT_FORMAT_JPEG}")
             Log.d(TAG, "OUTPUT_FORMAT_RAW = ${ImageCapture.OUTPUT_FORMAT_RAW}")
-            
-            // We want RAW and JPEG toggle
+
             val supportsRaw = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_RAW)
             val supportsJpeg = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_JPEG)
-            
-            // Only offer RAW and JPEG as options
+
             val workingFormats = mutableListOf<Int>()
             if (supportsRaw) workingFormats.add(ImageCapture.OUTPUT_FORMAT_RAW)
             if (supportsJpeg) workingFormats.add(ImageCapture.OUTPUT_FORMAT_JPEG)
-            
+
             availableFormats = workingFormats
-            
+
             Log.d(TAG, "Available formats: RAW=$supportsRaw, JPEG=$supportsJpeg")
             Log.d(TAG, "Working formats list: $workingFormats")
-            
-            // Notify callback with available formats
+
             onFormatsAvailable(workingFormats)
 
-            // Get initial rotation from display
             currentRotation = previewView.display?.rotation ?: Surface.ROTATION_0
 
             val builder = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setTargetRotation(currentRotation)
 
-            // Use current output format if it's supported, otherwise default to RAW or JPEG
             if (!workingFormats.contains(currentOutputFormat)) {
                 currentOutputFormat = when {
                     supportsRaw -> ImageCapture.OUTPUT_FORMAT_RAW
@@ -218,28 +203,25 @@ class CameraController {
                     else -> ImageCapture.OUTPUT_FORMAT_JPEG
                 }
             }
-            
+
             val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
             Log.d(TAG, "Using output format: $formatName")
-            
+
             builder.setOutputFormat(currentOutputFormat)
-            
-            // Set flash mode based on current state
+
             if (flashEnabled) {
                 builder.setFlashMode(ImageCapture.FLASH_MODE_ON)
             } else {
                 builder.setFlashMode(ImageCapture.FLASH_MODE_OFF)
             }
-            
+
             imageCapture = builder.build()
 
-            // Set up orientation listener to update rotation
             setupOrientationListener(context)
 
             try {
                 cameraProvider.unbindAll()
-                
-                // Use the delayed lifecycle owner to prevent premature unbinding
+
                 camera = cameraProvider.bindToLifecycle(
                     delayedLifecycleOwner!!,
                     cameraSelector,
@@ -247,8 +229,7 @@ class CameraController {
                     imageCapture
                 )
                 Log.d(TAG, "Camera bound successfully with rotation: $currentRotation, flash: $flashEnabled")
-                
-                // Notify that camera is ready for settings to be applied
+
                 onCameraReady()
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
@@ -266,12 +247,11 @@ class CameraController {
                     return
                 }
 
-                // Convert orientation degrees to Surface rotation
                 val rotation = when (orientation) {
-                    in 45..134 -> Surface.ROTATION_270    // Device rotated left (landscape)
-                    in 135..224 -> Surface.ROTATION_180   // Device upside down
-                    in 225..314 -> Surface.ROTATION_90    // Device rotated right (landscape)
-                    else -> Surface.ROTATION_0            // Device upright (portrait)
+                    in 45..134 -> Surface.ROTATION_270
+                    in 135..224 -> Surface.ROTATION_180
+                    in 225..314 -> Surface.ROTATION_90
+                    else -> Surface.ROTATION_0
                 }
 
                 if (rotation != currentRotation) {
@@ -282,7 +262,6 @@ class CameraController {
             }
         }
 
-        // Don't enable here - it will be enabled when activity resumes
         Log.d(TAG, "Orientation listener created (will be enabled on resume)")
     }
 
@@ -299,22 +278,19 @@ class CameraController {
             return
         }
 
-        // Increment pending capture count
         synchronized(captureLock) {
             pendingCaptureCount++
             Log.d(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
         }
 
-        // Determine file extension and MIME type based on format
         val (fileExtension, mimeType) = when (currentOutputFormat) {
             ImageCapture.OUTPUT_FORMAT_RAW -> ".dng" to "image/x-adobe-dng"
             else -> ".jpg" to "image/jpeg"
         }
-        
+
         val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
             .format(System.currentTimeMillis()) + fileExtension
 
-        // Create ContentValues for MediaStore
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
@@ -323,14 +299,12 @@ class CameraController {
             }
         }
 
-        // Create output options
         val outputOptions = ImageCapture.OutputFileOptions.Builder(
             context.contentResolver,
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             contentValues
         ).build()
 
-        // Take photo
         imageCapture.takePicture(
             outputOptions,
             cameraExecutor,
@@ -339,8 +313,7 @@ class CameraController {
                     val uri = outputFileResults.savedUri
                     val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
                     Log.d(TAG, "$formatName photo saved: $uri")
-                    
-                    // Decrement pending capture count
+
                     synchronized(captureLock) {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture completed (pending: $pendingCaptureCount)")
@@ -350,8 +323,7 @@ class CameraController {
                 override fun onError(exception: ImageCaptureException) {
                     Log.e(TAG, "Capture failed", exception)
                     postToast("Capture failed: ${exception.message}")
-                    
-                    // Decrement pending capture count
+
                     synchronized(captureLock) {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
@@ -380,7 +352,6 @@ class CameraController {
     }
 
     fun triggerFocus() {
-        // Trigger center focus if needed
         val cameraControl = camera?.cameraControl ?: return
         val factory = SurfaceOrientedMeteringPointFactory(1f, 1f)
         val point = factory.createPoint(0.5f, 0.5f)
@@ -392,12 +363,10 @@ class CameraController {
         val cameraControl = camera?.cameraControl ?: return
         val cameraInfo = camera?.cameraInfo ?: return
 
-        // Get exposure compensation range and step
         val exposureState = cameraInfo.exposureState
         val range = exposureState.exposureCompensationRange
         val step = exposureState.exposureCompensationStep
 
-        // Convert EV to index (EV / step)
         val index = (ev / step.toFloat()).toInt().coerceIn(range.lower, range.upper)
 
         cameraControl.setExposureCompensationIndex(index)
@@ -410,7 +379,6 @@ class CameraController {
         val camera2Control = Camera2CameraControl.from(cameraControl)
 
         if (enabled) {
-            // Clear all manual settings, re-enable AE
             val captureRequestOptions = CaptureRequestOptions.Builder()
                 .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 .clearCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY)
@@ -441,19 +409,17 @@ class CameraController {
             Log.w(TAG, "Format $format not supported, ignoring")
             return
         }
-        
+
         if (currentOutputFormat == format) {
             Log.d(TAG, "Already using format $format, skipping rebind")
             return
         }
-        
+
         currentOutputFormat = format
         Log.d(TAG, "Output format will change to: $format")
-        
-        // Cancel any pending rebind
+
         rebindJob?.cancel()
-        
-        // Debounce rebind by 500ms to avoid conflicts with ongoing captures
+
         rebindJob = coroutineScope.launch {
             delay(500)
             val owner = lifecycleOwner
@@ -464,36 +430,34 @@ class CameraController {
             }
         }
     }
-    
+
     fun setFlashEnabled(enabled: Boolean) {
         flashEnabled = enabled
         Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
-        
-        // Update flash mode on existing imageCapture if available
+
         imageCapture?.flashMode = if (enabled) {
             ImageCapture.FLASH_MODE_ON
         } else {
             ImageCapture.FLASH_MODE_OFF
         }
     }
-    
+
     fun hasPendingCaptures(): Boolean {
         synchronized(captureLock) {
             return pendingCaptureCount > 0
         }
     }
-    
+
     fun shutdown() {
         orientationEventListener?.disable()
         orientationEventListener = null
-        
-        // Wait for pending captures to complete before shutting down
+
         synchronized(captureLock) {
             if (pendingCaptureCount > 0) {
                 Log.w(TAG, "Shutdown requested with $pendingCaptureCount pending captures")
             }
         }
-        
+
         cameraExecutor.shutdown()
     }
 
