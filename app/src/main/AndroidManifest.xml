@@ -17,7 +17,7 @@
         android:theme="@style/AppTheme"
         tools:targetApi="31">
         <activity
-            android:name=".MainActivity"
+            android:name="com.vandam.zero.MainActivity"
             android:exported="true"
             android:theme="@style/AppTheme">
             <intent-filter>

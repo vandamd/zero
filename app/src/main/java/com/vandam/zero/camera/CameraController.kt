@@ -1,4 +1,4 @@
-package app.zero.camera
+package com.vandam.zero.camera
 
 import android.content.ContentValues
 import android.content.Context
@@ -137,6 +137,21 @@ class CameraController {
             }
         }
         
+        // Observe lifecycle to enable/disable orientation listener
+        lifecycleOwner.lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    orientationEventListener?.enable()
+                    Log.d(TAG, "Orientation listener enabled (app resumed)")
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    orientationEventListener?.disable()
+                    Log.d(TAG, "Orientation listener disabled (app paused)")
+                }
+                else -> {}
+            }
+        })
+        
         val context = previewView.context
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -267,8 +282,8 @@ class CameraController {
             }
         }
 
-        orientationEventListener?.enable()
-        Log.d(TAG, "Orientation listener enabled")
+        // Don't enable here - it will be enabled when activity resumes
+        Log.d(TAG, "Orientation listener created (will be enabled on resume)")
     }
 
     fun takePhoto() {

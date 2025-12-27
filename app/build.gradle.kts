@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "app.zero"
+    namespace = "com.vandam.zero"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.zero"
+        applicationId = "com.vandam.zero"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

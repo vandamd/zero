@@ -1,4 +1,4 @@
-package app.zero
+package com.vandam.zero
 
 import android.os.Bundle
 import android.util.Log
@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import app.zero.ui.CameraScreen
+import com.vandam.zero.ui.CameraScreen
 
 class MainActivity : ComponentActivity() {
     private val viewModel: CameraViewModel by viewModels()

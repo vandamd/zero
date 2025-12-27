@@ -1,4 +1,4 @@
-package app.zero.ui
+package com.vandam.zero.ui
 
 import android.Manifest
 import android.os.Build
@@ -62,9 +62,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import app.zero.R
+import com.vandam.zero.R
 import androidx.lifecycle.viewmodel.compose.viewModel
-import app.zero.CameraViewModel
+import com.vandam.zero.CameraViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
