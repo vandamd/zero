@@ -31,9 +31,12 @@ class MainActivity : ComponentActivity() {
         Log.d("ZeroKeys", "KeyDown: $keyCode")
         return when (keyCode) {
             KeyEvent.KEYCODE_CAMERA -> {
-                Log.d("ZeroKeys", "Camera Button Pressed")
-                // Toast.makeText(this, "Shutter Pressed", Toast.LENGTH_SHORT).show()
-                viewModel.onShutterButtonPress()
+                // Only trigger on initial press, not repeats
+                if (event?.repeatCount == 0) {
+                    Log.d("ZeroKeys", "Camera Button Pressed")
+                    // Toast.makeText(this, "Shutter Pressed", Toast.LENGTH_SHORT).show()
+                    viewModel.onShutterButtonPress()
+                }
                 true
             }
             KeyEvent.KEYCODE_FOCUS -> {

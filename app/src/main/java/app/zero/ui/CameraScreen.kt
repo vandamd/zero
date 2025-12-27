@@ -111,6 +111,7 @@ fun CameraContent(viewModel: CameraViewModel) {
     val exposureValue by viewModel.exposureValue.collectAsState()
     val isoValue by viewModel.isoValue.collectAsState()
     val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
+    val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
@@ -444,9 +445,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             }
 
-            // Auto-hide crosshair after delay
-            LaunchedEffect(crosshairPosition) {
-                if (crosshairPosition != null) {
+            // Auto-hide crosshair after delay (only if not holding focus button)
+            LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
+                if (crosshairPosition != null && !isFocusButtonHeld) {
                     delay(2000) // Show for 2 seconds
                     viewModel.hideCrosshair()
                 }

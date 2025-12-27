@@ -19,6 +19,15 @@ class CameraViewModel : ViewModel() {
     // Crosshair position (null = hidden, Pair = x,y coordinates in pixels)
     private val _crosshairPosition = MutableStateFlow<Pair<Float, Float>?>(null)
     val crosshairPosition: StateFlow<Pair<Float, Float>?> = _crosshairPosition
+    
+    // Last focus point - used to remember where user focused
+    private var lastFocusPoint: Pair<Float, Float>? = null
+    private var lastFocusTimestamp: Long = 0
+    private val focusMemoryTimeoutMs: Long = 5000 // Reset to center after 5 seconds of inactivity
+    
+    // Track if focus button is currently held down
+    private val _isFocusButtonHeld = MutableStateFlow(false)
+    val isFocusButtonHeld: StateFlow<Boolean> = _isFocusButtonHeld
 
     // Grid overlay toggle
     private val _gridEnabled = MutableStateFlow(false)
@@ -48,6 +57,9 @@ class CameraViewModel : ViewModel() {
     // Store screen dimensions for center focus
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
+    
+    // Debounce for shutter button
+    private var lastShotTimestamp: Long = 0
 
     enum class ExposureMode {
         AUTO, MANUAL
@@ -145,6 +157,19 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onShutterButtonPress() {
+        // Debounce: prevent rapid-fire shots based on exposure settings
+        val currentTime = System.currentTimeMillis()
+        val minDelayMs = calculateMinimumShotDelay()
+        
+        if (currentTime - lastShotTimestamp < minDelayMs) {
+            // Too soon, ignore this press
+            return
+        }
+        lastShotTimestamp = currentTime
+        
+        // Taking a photo counts as activity - keep focus point alive
+        lastFocusTimestamp = currentTime
+        
         // Trigger flash immediately on button press
         _shutterFlash.value = true
 
@@ -152,22 +177,65 @@ class CameraViewModel : ViewModel() {
             cameraController.takePhoto()
         }
     }
+    
+    private fun calculateMinimumShotDelay(): Long {
+        return when (_exposureMode.value) {
+            ExposureMode.MANUAL -> {
+                // In manual mode, use shutter speed + 50% buffer
+                val shutterSpeedMs = _shutterSpeedNs.value / 1_000_000
+                (shutterSpeedMs * 1.5).toLong().coerceAtLeast(200) // At least 200ms
+            }
+            ExposureMode.AUTO -> {
+                // In auto mode, use a reasonable default (camera decides exposure)
+                // Allow faster shooting since we don't know the actual exposure time
+                300L // 300ms minimum in auto mode
+            }
+        }
+    }
 
     fun onFocusButtonPress() {
-        // Focus at center and show crosshair there
-        if (screenWidth > 0 && screenHeight > 0) {
+        _isFocusButtonHeld.value = true
+        
+        // Check if focus memory has expired
+        val currentTime = System.currentTimeMillis()
+        if (lastFocusPoint != null && currentTime - lastFocusTimestamp > focusMemoryTimeoutMs) {
+            // Timeout expired, reset to center
+            lastFocusPoint = null
+        }
+        
+        // Use the last focus point if available, otherwise focus at center
+        val (focusX, focusY) = if (lastFocusPoint != null) {
+            lastFocusPoint!!
+        } else if (screenWidth > 0 && screenHeight > 0) {
             val centerX = screenWidth / 2f
             val centerY = screenHeight / 2f
-            showCrosshair(centerX, centerY)
+            // Remember center as the focus point for future half-presses
+            lastFocusPoint = Pair(centerX, centerY)
+            Pair(centerX, centerY)
+        } else {
+            return // Can't focus without dimensions
         }
-        cameraController.triggerFocus()
+        
+        // Update timestamp to keep focus point alive
+        lastFocusTimestamp = currentTime
+        
+        // Show crosshair while focus button is held
+        showCrosshair(focusX, focusY)
+        
+        // Trigger focus at the remembered point
+        cameraController.onTapToFocus(focusX, focusY, screenWidth, screenHeight)
     }
 
     fun onFocusButtonRelease() {
-        // Optional: cancel focus or unlock
+        _isFocusButtonHeld.value = false
+        // Hide crosshair when focus button is released
+        hideCrosshair()
     }
 
     fun onTapToFocus(x: Float, y: Float, width: Float, height: Float) {
+        // Remember this focus point for later use (e.g., when half-pressing shutter)
+        lastFocusPoint = Pair(x, y)
+        lastFocusTimestamp = System.currentTimeMillis()
         showCrosshair(x, y)
         cameraController.onTapToFocus(x, y, width, height)
     }
