@@ -19,12 +19,24 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            
+            isDebuggable = false
+            isJniDebuggable = false
+            
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
         }
     }
     compileOptions {
@@ -45,27 +57,21 @@ android {
 }
 
 dependencies {
-    // CameraX
     implementation("androidx.camera:camera-core:1.5.1")
     implementation("androidx.camera:camera-camera2:1.5.1")
     implementation("androidx.camera:camera-lifecycle:1.5.1")
     implementation("androidx.camera:camera-view:1.5.1")
-    implementation("androidx.camera:camera-extensions:1.5.1")
 
-    // Jetpack Compose
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.activity:activity-compose:1.9.0")
 
-    // Lifecycle
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.0")
 
-    // Permissions
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
 
-    // Core
     implementation("androidx.core:core-ktx:1.13.1")
 }
