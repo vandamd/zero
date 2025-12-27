@@ -56,8 +56,18 @@ class CameraController {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
+    
+    fun setInitialOutputFormat(format: Int) {
+        currentOutputFormat = format
+        Log.d(TAG, "Initial output format set to: $format")
+    }
 
-    fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView, onFormatsAvailable: (List<Int>) -> Unit = {}) {
+    fun bindCamera(
+        lifecycleOwner: LifecycleOwner, 
+        previewView: PreviewView, 
+        onFormatsAvailable: (List<Int>) -> Unit = {},
+        onCameraReady: () -> Unit = {}
+    ) {
         this.lifecycleOwner = lifecycleOwner
         this.previewView = previewView
         val context = previewView.context
@@ -153,6 +163,9 @@ class CameraController {
                     imageCapture
                 )
                 Log.d(TAG, "Camera bound successfully with rotation: $currentRotation, flash: $flashEnabled")
+                
+                // Notify that camera is ready for settings to be applied
+                onCameraReady()
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
