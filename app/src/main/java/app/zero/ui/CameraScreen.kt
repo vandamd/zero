@@ -42,9 +42,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +66,11 @@ import app.zero.CameraViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
+import kotlin.math.pow
+import kotlin.math.log2
+import kotlin.math.abs
+import kotlin.math.round
+
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -99,8 +106,11 @@ fun CameraContent(viewModel: CameraViewModel) {
     val showFlash by viewModel.shutterFlash.collectAsState()
     val crosshairPosition by viewModel.crosshairPosition.collectAsState()
     val gridEnabled by viewModel.gridEnabled.collectAsState()
-    val exposureExpanded by viewModel.exposureExpanded.collectAsState()
+    val sliderMode by viewModel.sliderMode.collectAsState()
+    val exposureMode by viewModel.exposureMode.collectAsState()
     val exposureValue by viewModel.exposureValue.collectAsState()
+    val isoValue by viewModel.isoValue.collectAsState()
+    val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
     
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
@@ -113,69 +123,221 @@ fun CameraContent(viewModel: CameraViewModel) {
                 .width(60.dp)
                 .fillMaxHeight()
                 .background(Color.Black),
-            verticalArrangement = Arrangement.Top
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-
-            // Grid toggle icon
-            IconButton(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.toggleGrid()
-                },
-                modifier = Modifier.size(60.dp)
+            // Top section - Mode-dependent controls
+            Column(
+                modifier = Modifier.padding(top = 16.dp)
             ) {
-                Icon(
-                    painter = painterResource(
-                        id = if (gridEnabled) R.drawable.grid_stroke_rounded
-                        else R.drawable.grid_off_stroke_rounded
-                    ),
-                    contentDescription = "Toggle grid",
-                    tint = Color.Unspecified,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .rotate(90f)
-                )
+                // Auto mode: Show exposure compensation
+                if (exposureMode == CameraViewModel.ExposureMode.AUTO) {
+                    // Exposure icon and value group
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .width(60.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleExposurePanel()
+                            }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.exposure_stroke_rounded),
+                            contentDescription = "Exposure compensation",
+                            tint = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
+                            else Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .rotate(90f)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Text(
+                            text = when {
+                                exposureValue == 0f -> "0.0"
+                                exposureValue > 0 -> "+${exposureValue}"
+                                else -> "${exposureValue}"
+                            },
+                            color = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
+                                else Color.White.copy(alpha = 0.7f),
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 32.sp,
+                                fontFamily = publicSans,
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            modifier = Modifier.rotate(90f)
+                        )
+                    }
+                }
+                
+                // Manual mode: Show ISO and Shutter Speed
+                if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
+                    // ISO label and value combined
+                    Box(
+                        modifier = Modifier
+                            .width(60.dp)
+                            .height(140.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleIsoPanel()
+                            },
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Text(
+                            text = "ISO ${isoValue}",
+                            color = if (sliderMode == CameraViewModel.SliderMode.ISO) Color.White.copy(alpha = 1f)
+                                else Color.White.copy(alpha = 0.7f),
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 32.sp,
+                                fontFamily = publicSans,
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(
+                                        constraints.copy(
+                                            minWidth = 0,
+                                            maxWidth = Int.MAX_VALUE
+                                        )
+                                    )
+                                    // Swap width and height for rotated layout
+                                    layout(placeable.height, placeable.width) {
+                                        placeable.place(
+                                            x = 0,
+                                            y = -placeable.height
+                                        )
+                                    }
+                                }
+                                .graphicsLayer(
+                                    rotationZ = 90f,
+                                    transformOrigin = TransformOrigin(0f, 1f)
+                                )
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Shutter speed display
+                    Box(
+                        modifier = Modifier
+                            .width(60.dp)
+                            .height(100.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleShutterPanel()
+                            },
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Text(
+                            text = formatShutterSpeed(shutterSpeedNs),
+                            color = if (sliderMode == CameraViewModel.SliderMode.SHUTTER) Color.White.copy(alpha = 1f)
+                                else Color.White.copy(alpha = 0.7f),
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 32.sp,
+                                fontFamily = publicSans,
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(
+                                        constraints.copy(
+                                            minWidth = 0,
+                                            maxWidth = Int.MAX_VALUE
+                                        )
+                                    )
+                                    layout(placeable.height, placeable.width) {
+                                        placeable.place(
+                                            x = 0,
+                                            y = -placeable.height
+                                        )
+                                    }
+                                }
+                                .graphicsLayer(
+                                    rotationZ = 90f,
+                                    transformOrigin = TransformOrigin(0f, 1f)
+                                )
+                        )
+                    }
+                }
             }
 
-            // Exposure icon and value group
+            // Bottom section - Mode buttons and Grid toggle
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .width(60.dp)
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.toggleExposurePanel()
-                    }
-                    .padding(vertical = 8.dp)
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.exposure_stroke_rounded),
-                    contentDescription = "Exposure compensation",
-                    tint = if (exposureExpanded) Color.White.copy(alpha = 1f)
-                    else Color.White.copy(alpha = 0.7f),
+                // Auto mode button
+                Box(
                     modifier = Modifier
-                        .size(32.dp)
-                        .rotate(90f)
-                )
+                        .size(60.dp)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.setExposureMode(CameraViewModel.ExposureMode.AUTO)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "A",
+                        color = if (exposureMode == CameraViewModel.ExposureMode.AUTO) Color.White
+                            else Color.White.copy(alpha = 0.4f),
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 32.sp,
+                            fontFamily = publicSans,
+                            fontWeight = FontWeight.ExtraBold
+                        ),
+                        modifier = Modifier.rotate(90f)
+                    )
+                }
                 
-                Spacer(modifier = Modifier.height(12.dp))
+                // Manual mode button
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.setExposureMode(CameraViewModel.ExposureMode.MANUAL)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "M",
+                        color = if (exposureMode == CameraViewModel.ExposureMode.MANUAL) Color.White
+                            else Color.White.copy(alpha = 0.4f),
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 32.sp,
+                            fontFamily = publicSans,
+                            fontWeight = FontWeight.ExtraBold
+                        ),
+                        modifier = Modifier.rotate(90f)
+                    )
+                }
                 
-                Text(
-                    text = when {
-                        exposureValue == 0f -> "0.0"
-                        exposureValue > 0 -> "+${exposureValue}"
-                        else -> "${exposureValue}"
+                // Grid toggle
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.toggleGrid()
                     },
-                    color = if (exposureExpanded) Color.White.copy(alpha = 1f)
-                        else Color.White.copy(alpha = 0.7f),
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 32.sp,
-                        fontFamily = publicSans,
-                        fontWeight = FontWeight.ExtraBold
-                    ),
-                    modifier = Modifier.rotate(90f)
-                )
+                    modifier = Modifier.size(60.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (gridEnabled) R.drawable.grid_stroke_rounded
+                            else R.drawable.grid_off_stroke_rounded
+                        ),
+                        contentDescription = "Toggle grid",
+                        tint = Color.Unspecified,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .rotate(90f)
+                    )
+                }
             }
         }
 
@@ -223,17 +385,42 @@ fun CameraContent(viewModel: CameraViewModel) {
                 GridOverlay()
             }
 
-            // Exposure slider (overlaid on top of viewfinder)
-            if (exposureExpanded) {
-                ExposureSlider(
-                    value = exposureValue,
-                    onValueChange = { viewModel.setExposureValue(it) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(60.dp)
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 24.dp, vertical = 12.dp)
-                )
+            // Slider (overlaid on top of viewfinder) - changes based on mode
+            when (sliderMode) {
+                CameraViewModel.SliderMode.EXPOSURE -> {
+                    ExposureSlider(
+                        value = exposureValue,
+                        onValueChange = { viewModel.setExposureValue(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    )
+                }
+                CameraViewModel.SliderMode.ISO -> {
+                    IsoSlider(
+                        value = isoValue,
+                        onValueChange = { viewModel.setIsoValue(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    )
+                }
+                CameraViewModel.SliderMode.SHUTTER -> {
+                    ShutterSpeedSlider(
+                        value = shutterSpeedNs,
+                        onValueChange = { viewModel.setShutterSpeed(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    )
+                }
+                CameraViewModel.SliderMode.NONE -> {}
             }
 
             // Shutter flash effect
@@ -470,6 +657,237 @@ fun ExposureSlider(
         val thumbX = normalizedValue * size.width
 
         // Thumb indicator (vertical line) - white for grabbing
+        drawLine(
+            color = Color.White,
+            start = Offset(thumbX, 0f),
+            end = Offset(thumbX, size.height),
+            strokeWidth = thumbStrokeWidth
+        )
+    }
+}
+
+@Composable
+fun IsoSlider(
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    var lastSnappedValue by remember { mutableStateOf(value) }
+    
+    // Logarithmic scale mapping
+    fun positionToIso(position: Float): Int {
+        // ISO = 100 * 2^(position * 5)
+        // Range: 100 to 3200 (100, 200, 400, 800, 1600, 3200)
+        val logValue = 100 * 2.0.pow((position * 5).toDouble())
+        return logValue.toInt().coerceIn(100, 3200)
+    }
+    
+    fun isoToPosition(iso: Int): Float {
+        // position = log2(iso/100) / 5
+        val position = log2(iso / 100.0) / 5.0
+        return position.toFloat().coerceIn(0f, 1f)
+    }
+    
+    fun snapToNearestIso(iso: Int): Int {
+        val validIsos = listOf(100, 200, 400, 800, 1600, 3200)
+        return validIsos.minByOrNull { abs(it - iso) } ?: 400
+    }
+    
+    Canvas(
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectDragGestures { change, _ ->
+                    change.consume()
+                    // Convert drag position to ISO value using logarithmic scale
+                    val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                    val rawValue = positionToIso(fraction)
+                    val snappedValue = snapToNearestIso(rawValue)
+                    if (snappedValue != lastSnappedValue) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        lastSnappedValue = snappedValue
+                        onValueChange(snappedValue)
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    // Convert tap position to ISO value using logarithmic scale
+                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                    val rawValue = positionToIso(fraction)
+                    val snappedValue = snapToNearestIso(rawValue)
+                    if (snappedValue != lastSnappedValue) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        lastSnappedValue = snappedValue
+                        onValueChange(snappedValue)
+                    }
+                }
+            }
+    ) {
+        val trackStrokeWidth = 3f
+        val thumbStrokeWidth = 8f
+        val centerY = size.height / 2f
+        val notchLength = 16f
+        val trackColor = Color.White
+
+        // Main horizontal track line
+        drawLine(
+            color = trackColor,
+            start = Offset(0f, centerY),
+            end = Offset(size.width, centerY),
+            strokeWidth = trackStrokeWidth
+        )
+
+        // Draw notches for ISO steps (100, 200, 400, 800, 1600, 3200)
+        val isoSteps = listOf(100, 200, 400, 800, 1600, 3200)
+        isoSteps.forEach { iso ->
+            val normalizedValue = isoToPosition(iso)
+            val notchX = normalizedValue * size.width
+
+            // Longer notch for common values (400, 800, 1600)
+            val length = when (iso) {
+                400 -> notchLength * 2.2f  // Extra long for 400 (standard/default)
+                800, 1600 -> notchLength * 1.8f
+                else -> notchLength
+            }
+
+            drawLine(
+                color = trackColor,
+                start = Offset(notchX, centerY - length / 2f),
+                end = Offset(notchX, centerY + length / 2f),
+                strokeWidth = trackStrokeWidth
+            )
+        }
+
+        // Calculate thumb position using logarithmic scale
+        val normalizedValue = isoToPosition(value)
+        val thumbX = normalizedValue * size.width
+
+        // Thumb indicator (vertical line) - white for grabbing
+        drawLine(
+            color = Color.White,
+            start = Offset(thumbX, 0f),
+            end = Offset(thumbX, size.height),
+            strokeWidth = thumbStrokeWidth
+        )
+    }
+}
+
+// Helper function to format shutter speed for display
+fun formatShutterSpeed(ns: Long): String {
+    val seconds = ns / 1_000_000_000.0
+    return when {
+        seconds >= 1.0 -> "${seconds.toInt()}s"
+        else -> "1/${(1.0 / seconds).toInt()}"
+    }
+}
+
+@Composable
+fun ShutterSpeedSlider(
+    value: Long,
+    onValueChange: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    var lastSnappedValue by remember { mutableStateOf(value) }
+    
+    // Shutter speeds in nanoseconds (1/1000s to 1s)
+    // 1/1000, 1/500, 1/250, 1/125, 1/60, 1/30, 1/15, 1/8, 1/4, 1/2, 1s
+    val shutterSpeeds = listOf(
+        1_000_000L,      // 1/1000s
+        2_000_000L,      // 1/500s
+        4_000_000L,      // 1/250s
+        8_000_000L,      // 1/125s
+        16_666_666L,     // 1/60s
+        33_333_333L,     // 1/30s
+        66_666_666L,     // 1/15s
+        125_000_000L,    // 1/8s
+        250_000_000L,    // 1/4s
+        500_000_000L,    // 1/2s
+        1_000_000_000L   // 1s
+    )
+    
+    fun positionToShutter(position: Float): Long {
+        val index = (position * (shutterSpeeds.size - 1)).toInt().coerceIn(0, shutterSpeeds.size - 1)
+        return shutterSpeeds[index]
+    }
+    
+    fun shutterToPosition(shutter: Long): Float {
+        val index = shutterSpeeds.indexOfFirst { it >= shutter }.takeIf { it >= 0 } ?: (shutterSpeeds.size - 1)
+        return index.toFloat() / (shutterSpeeds.size - 1)
+    }
+    
+    fun snapToNearestShutter(ns: Long): Long {
+        return shutterSpeeds.minByOrNull { abs(it - ns) } ?: 16_666_666L
+    }
+    
+    Canvas(
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectDragGestures { change, _ ->
+                    change.consume()
+                    val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                    val rawValue = positionToShutter(fraction)
+                    val snappedValue = snapToNearestShutter(rawValue)
+                    if (snappedValue != lastSnappedValue) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        lastSnappedValue = snappedValue
+                        onValueChange(snappedValue)
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                    val rawValue = positionToShutter(fraction)
+                    val snappedValue = snapToNearestShutter(rawValue)
+                    if (snappedValue != lastSnappedValue) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        lastSnappedValue = snappedValue
+                        onValueChange(snappedValue)
+                    }
+                }
+            }
+    ) {
+        val trackStrokeWidth = 3f
+        val thumbStrokeWidth = 8f
+        val centerY = size.height / 2f
+        val notchLength = 16f
+        val trackColor = Color.White
+
+        // Main horizontal track line
+        drawLine(
+            color = trackColor,
+            start = Offset(0f, centerY),
+            end = Offset(size.width, centerY),
+            strokeWidth = trackStrokeWidth
+        )
+
+        // Draw notches for shutter speed steps
+        shutterSpeeds.forEachIndexed { index, speed ->
+            val normalizedValue = index.toFloat() / (shutterSpeeds.size - 1)
+            val notchX = normalizedValue * size.width
+
+            // Longer notch for common values (1/60, 1/125)
+            val length = when (speed) {
+                16_666_666L -> notchLength * 2.2f  // 1/60s - common default
+                8_000_000L, 33_333_333L -> notchLength * 1.8f  // 1/125s, 1/30s
+                else -> notchLength
+            }
+
+            drawLine(
+                color = trackColor,
+                start = Offset(notchX, centerY - length / 2f),
+                end = Offset(notchX, centerY + length / 2f),
+                strokeWidth = trackStrokeWidth
+            )
+        }
+
+        // Calculate thumb position
+        val normalizedValue = shutterToPosition(value)
+        val thumbX = normalizedValue * size.width
+
+        // Thumb indicator (vertical line)
         drawLine(
             color = Color.White,
             start = Offset(thumbX, 0f),

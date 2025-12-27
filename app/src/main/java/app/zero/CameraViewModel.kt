@@ -24,16 +24,38 @@ class CameraViewModel : ViewModel() {
     private val _gridEnabled = MutableStateFlow(false)
     val gridEnabled: StateFlow<Boolean> = _gridEnabled
 
-    // Exposure compensation
-    private val _exposureExpanded = MutableStateFlow(false)
-    val exposureExpanded: StateFlow<Boolean> = _exposureExpanded
+    // Exposure mode (Auto vs Manual)
+    private val _exposureMode = MutableStateFlow(ExposureMode.AUTO)
+    val exposureMode: StateFlow<ExposureMode> = _exposureMode
 
+    // Active slider mode
+    private val _sliderMode = MutableStateFlow<SliderMode>(SliderMode.NONE)
+    val sliderMode: StateFlow<SliderMode> = _sliderMode
+
+    // Exposure compensation (Auto mode)
     private val _exposureValue = MutableStateFlow(0f)  // -2.0 to +2.0 EV
     val exposureValue: StateFlow<Float> = _exposureValue
+
+    // ISO (Manual mode)
+    private val _isoValue = MutableStateFlow(400)  // 100 to 3200
+    val isoValue: StateFlow<Int> = _isoValue
+
+    // Shutter speed in nanoseconds (Manual mode)
+    // Common values: 1/1000s, 1/500s, 1/250s, 1/125s, 1/60s, 1/30s, 1/15s
+    private val _shutterSpeedNs = MutableStateFlow(16_666_666L)  // 1/60s default
+    val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs
 
     // Store screen dimensions for center focus
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
+
+    enum class ExposureMode {
+        AUTO, MANUAL
+    }
+
+    enum class SliderMode {
+        NONE, EXPOSURE, ISO, SHUTTER
+    }
 
     fun resetShutterFlash() {
         _shutterFlash.value = false
@@ -57,7 +79,42 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleExposurePanel() {
-        _exposureExpanded.value = !_exposureExpanded.value
+        _sliderMode.value = if (_sliderMode.value == SliderMode.EXPOSURE) {
+            SliderMode.NONE
+        } else {
+            SliderMode.EXPOSURE
+        }
+    }
+
+    fun toggleIsoPanel() {
+        _sliderMode.value = if (_sliderMode.value == SliderMode.ISO) {
+            SliderMode.NONE
+        } else {
+            SliderMode.ISO
+        }
+    }
+
+    fun toggleShutterPanel() {
+        _sliderMode.value = if (_sliderMode.value == SliderMode.SHUTTER) {
+            SliderMode.NONE
+        } else {
+            SliderMode.SHUTTER
+        }
+    }
+
+    fun setExposureMode(mode: ExposureMode) {
+        _exposureMode.value = mode
+        _sliderMode.value = SliderMode.NONE
+        
+        if (mode == ExposureMode.AUTO) {
+            // Re-enable auto exposure
+            cameraController.setAutoExposure(true)
+            // Re-apply exposure compensation
+            cameraController.setExposureCompensation(_exposureValue.value)
+        } else {
+            // Apply current manual settings
+            cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
+        }
     }
 
     fun setExposureValue(ev: Float) {
@@ -65,8 +122,18 @@ class CameraViewModel : ViewModel() {
         cameraController.setExposureCompensation(ev)
     }
 
+    fun setIsoValue(iso: Int) {
+        _isoValue.value = iso.coerceIn(100, 3200)
+        cameraController.setManualExposure(iso, _shutterSpeedNs.value)
+    }
+
+    fun setShutterSpeed(ns: Long) {
+        _shutterSpeedNs.value = ns
+        cameraController.setManualExposure(_isoValue.value, ns)
+    }
+
     fun closeAllPanels() {
-        _exposureExpanded.value = false
+        _sliderMode.value = SliderMode.NONE
     }
 
     fun createPreviewView(context: Context): PreviewView {

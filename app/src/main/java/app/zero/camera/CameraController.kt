@@ -2,12 +2,18 @@ package app.zero.camera
 
 import android.content.ContentValues
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Range
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.widget.Toast
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -231,6 +237,38 @@ class CameraController {
 
         cameraControl.setExposureCompensationIndex(index)
         Log.d(TAG, "Set exposure compensation: EV=$ev, index=$index")
+    }
+
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    fun setAutoExposure(enabled: Boolean) {
+        val cameraControl = camera?.cameraControl ?: return
+        val camera2Control = Camera2CameraControl.from(cameraControl)
+
+        if (enabled) {
+            // Clear all manual settings, re-enable AE
+            val captureRequestOptions = CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                .clearCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY)
+                .clearCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME)
+                .build()
+            camera2Control.setCaptureRequestOptions(captureRequestOptions)
+            Log.d(TAG, "Auto exposure enabled")
+        }
+    }
+
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    fun setManualExposure(iso: Int, exposureTimeNs: Long) {
+        val cameraControl = camera?.cameraControl ?: return
+        val camera2Control = Camera2CameraControl.from(cameraControl)
+
+        val captureRequestOptions = CaptureRequestOptions.Builder()
+            .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTimeNs)
+            .build()
+
+        camera2Control.setCaptureRequestOptions(captureRequestOptions)
+        Log.d(TAG, "Set manual exposure: ISO=$iso, shutter=${exposureTimeNs}ns")
     }
 
     fun shutdown() {
