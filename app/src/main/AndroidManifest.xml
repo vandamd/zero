@@ -12,6 +12,7 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
         android:label="Zero"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
