@@ -398,11 +398,56 @@ fun CameraContent(viewModel: CameraViewModel) {
                         x = with(density) { (x - crosshairSizePx / 2f).toDp() },
                         y = with(density) { (y - crosshairSizePx / 2f).toDp() }
                     )
+                )
+            }
+
+            if (gridEnabled) {
+                GridOverlay()
+            }
+
+            when (sliderMode) {
+                CameraViewModel.SliderMode.EXPOSURE -> {
+                    ExposureSlider(
+                        value = exposureValue,
+                        onValueChange = { viewModel.setExposureValue(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
                     )
                 }
+                CameraViewModel.SliderMode.ISO -> {
+                    IsoSlider(
+                        value = isoValue,
+                        onValueChange = { viewModel.setIsoValue(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    )
+                }
+                CameraViewModel.SliderMode.SHUTTER -> {
+                    ShutterSpeedSlider(
+                        value = shutterSpeedNs,
+                        onValueChange = { viewModel.setShutterSpeed(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    )
+                }
+                CameraViewModel.SliderMode.NONE -> {}
+            }
 
-                if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
-                    Box(
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showFlash,
+                enter = fadeIn(animationSpec = tween(50)),
+                exit = fadeOut(animationSpec = tween(100))
+            ) {
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black)
