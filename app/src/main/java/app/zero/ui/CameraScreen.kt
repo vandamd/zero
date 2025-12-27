@@ -53,6 +53,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -118,7 +120,12 @@ fun CameraContent(viewModel: CameraViewModel) {
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
     )
+    
+    // Override density to disable font scaling - makes all sizes constant
+    val density = LocalDensity.current
+    val fixedDensity = Density(density.density, fontScale = 0.85f)
 
+    CompositionLocalProvider(LocalDensity provides fixedDensity) {
     Row(modifier = Modifier.fillMaxSize()) {
         // Left toolbar (fixed width)
         Column(
@@ -480,6 +487,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             }
         }
+    }
     }
 }
 
