@@ -13,3 +13,5 @@ app/build
 google-services.json
 release.properties
 *.hprof
+*.jks
+keystore-base64.txt
