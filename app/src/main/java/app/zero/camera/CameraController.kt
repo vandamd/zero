@@ -5,6 +5,8 @@ import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import android.view.OrientationEventListener
+import android.view.Surface
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -27,6 +29,8 @@ class CameraController {
     private var imageCapture: ImageCapture? = null
     private var camera: Camera? = null
     private var context: Context? = null
+    private var orientationEventListener: OrientationEventListener? = null
+    private var currentRotation: Int = Surface.ROTATION_0
 
     fun createPreviewView(context: Context): PreviewView {
         this.context = context
@@ -68,8 +72,12 @@ class CameraController {
             Log.d(TAG, "Camera supports RAW: $supportsRaw")
             Log.d(TAG, "Supported formats: ${capabilities.supportedOutputFormats}")
 
+            // Get initial rotation from display
+            currentRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+
             val builder = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setTargetRotation(currentRotation)
 
             // Set output format to RAW if supported
             if (supportsRaw) {
@@ -81,6 +89,9 @@ class CameraController {
 
             imageCapture = builder.build()
 
+            // Set up orientation listener to update rotation
+            setupOrientationListener(context)
+
             try {
                 cameraProvider.unbindAll()
                 camera = cameraProvider.bindToLifecycle(
@@ -89,11 +100,41 @@ class CameraController {
                     preview,
                     imageCapture
                 )
+                Log.d(TAG, "Camera bound successfully with rotation: $currentRotation")
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
 
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    private fun setupOrientationListener(context: Context) {
+        orientationEventListener?.disable()
+
+        orientationEventListener = object : OrientationEventListener(context) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) {
+                    return
+                }
+
+                // Convert orientation degrees to Surface rotation
+                val rotation = when (orientation) {
+                    in 45..134 -> Surface.ROTATION_270    // Device rotated left (landscape)
+                    in 135..224 -> Surface.ROTATION_180   // Device upside down
+                    in 225..314 -> Surface.ROTATION_90    // Device rotated right (landscape)
+                    else -> Surface.ROTATION_0            // Device upright (portrait)
+                }
+
+                if (rotation != currentRotation) {
+                    currentRotation = rotation
+                    imageCapture?.targetRotation = rotation
+                    Log.d(TAG, "Rotation updated to: $rotation (orientation: ${orientation}°)")
+                }
+            }
+        }
+
+        orientationEventListener?.enable()
+        Log.d(TAG, "Orientation listener enabled")
     }
 
     fun takePhoto() {
@@ -178,6 +219,8 @@ class CameraController {
     }
 
     fun shutdown() {
+        orientationEventListener?.disable()
+        orientationEventListener = null
         cameraExecutor.shutdown()
     }
 
