@@ -91,11 +91,30 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         permissionsState.launchMultiplePermissionRequest()
     }
 
+    val publicSans = FontFamily(
+        Font(R.font.publicsans_variablefont_wght)
+    )
+
     if (permissionsState.allPermissionsGranted) {
         CameraContent(viewModel)
     } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "Camera permission required")
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Camera permission is required to use this app.",
+                color = Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 32.sp,
+                    fontFamily = publicSans,
+                    fontWeight = FontWeight.Bold
+                )
+            )
         }
     }
 }
