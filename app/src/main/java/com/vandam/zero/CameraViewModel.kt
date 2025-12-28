@@ -161,6 +161,18 @@ class CameraViewModel : ViewModel() {
         saveSettings()
     }
 
+    fun resetExposureToDefault() {
+        setExposureValue(0f)
+    }
+
+    fun resetIsoToDefault() {
+        setIsoValue(400)
+    }
+
+    fun resetShutterSpeedToDefault() {
+        setShutterSpeed(16_666_666L)
+    }
+
     fun closeAllPanels() {
         _sliderMode.value = SliderMode.NONE
     }

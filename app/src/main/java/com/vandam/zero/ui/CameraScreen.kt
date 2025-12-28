@@ -143,9 +143,17 @@ fun CameraContent(viewModel: CameraViewModel) {
                         verticalArrangement = Arrangement.Center,
                         modifier = Modifier
                             .width(60.dp)
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleExposurePanel()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleExposurePanel()
+                                    },
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.resetExposureToDefault()
+                                    }
+                                )
                             }
                             .padding(vertical = 0.dp)
                     ) {
@@ -186,9 +194,17 @@ fun CameraContent(viewModel: CameraViewModel) {
                         modifier = Modifier
                             .width(60.dp)
                             .height(120.dp)
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleIsoPanel()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleIsoPanel()
+                                    },
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.resetIsoToDefault()
+                                    }
+                                )
                             },
                         contentAlignment = Alignment.TopCenter
                     ) {
@@ -232,9 +248,17 @@ fun CameraContent(viewModel: CameraViewModel) {
                         modifier = Modifier
                             .width(60.dp)
                             .height(77.dp)
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleShutterPanel()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleShutterPanel()
+                                    },
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.resetShutterSpeedToDefault()
+                                    }
+                                )
                             },
                         contentAlignment = Alignment.TopCenter
                     ) {
