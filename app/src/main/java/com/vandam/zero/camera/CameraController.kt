@@ -100,6 +100,7 @@ class CameraController {
     private var rebindJob: Job? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     private var flashEnabled: Boolean = false
+    private var lifecycleObserverAdded: Boolean = false
 
     private var pendingCaptureCount = 0
     private val captureLock = Object()
@@ -131,19 +132,22 @@ class CameraController {
             }
         }
 
-        lifecycleOwner.lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    orientationEventListener?.enable()
-                    Log.d(TAG, "Orientation listener enabled (app resumed)")
+        if (!lifecycleObserverAdded) {
+            lifecycleObserverAdded = true
+            lifecycleOwner.lifecycle.addObserver(LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        orientationEventListener?.enable()
+                        Log.d(TAG, "Orientation listener enabled (app resumed)")
+                    }
+                    Lifecycle.Event.ON_PAUSE -> {
+                        orientationEventListener?.disable()
+                        Log.d(TAG, "Orientation listener disabled (app paused)")
+                    }
+                    else -> {}
                 }
-                Lifecycle.Event.ON_PAUSE -> {
-                    orientationEventListener?.disable()
-                    Log.d(TAG, "Orientation listener disabled (app paused)")
-                }
-                else -> {}
-            }
-        })
+            })
+        }
 
         val context = previewView.context
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
