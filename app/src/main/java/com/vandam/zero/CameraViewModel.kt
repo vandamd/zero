@@ -23,7 +23,7 @@ class CameraViewModel : ViewModel() {
 
     private var lastFocusPoint: Pair<Float, Float>? = null
     private var lastFocusTimestamp: Long = 0
-    private val focusMemoryTimeoutMs: Long = 5000
+    private val focusMemoryTimeoutMs: Long = 3000
 
     private val _isFocusButtonHeld = MutableStateFlow(false)
     val isFocusButtonHeld: StateFlow<Boolean> = _isFocusButtonHeld
