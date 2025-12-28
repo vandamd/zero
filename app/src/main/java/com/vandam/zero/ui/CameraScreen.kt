@@ -369,6 +369,7 @@ fun CameraContent(viewModel: CameraViewModel) {
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .background(Color.Black)
                 .onSizeChanged { size ->
                     viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
                 }
@@ -379,6 +380,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                 },
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer { alpha = if (showFlash) 0f else 1f }
                     .pointerInput(Unit) {
                         detectTapGestures { offset ->
                             viewModel.onTapToFocus(offset.x, offset.y, size.width.toFloat(), size.height.toFloat())
@@ -389,20 +391,22 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             )
 
-            crosshairPosition?.let { (x, y) ->
-                val density = LocalDensity.current
-                val crosshairSizePx = with(density) { 80.dp.toPx() }
+            if (!showFlash) {
+                crosshairPosition?.let { (x, y) ->
+                    val density = LocalDensity.current
+                    val crosshairSizePx = with(density) { 80.dp.toPx() }
 
-                Crosshair(
-                    modifier = Modifier.offset(
-                        x = with(density) { (x - crosshairSizePx / 2f).toDp() },
-                        y = with(density) { (y - crosshairSizePx / 2f).toDp() }
+                    Crosshair(
+                        modifier = Modifier.offset(
+                            x = with(density) { (x - crosshairSizePx / 2f).toDp() },
+                            y = with(density) { (y - crosshairSizePx / 2f).toDp() }
+                        )
                     )
-                )
-            }
+                }
 
-            if (gridEnabled) {
-                GridOverlay()
+                if (gridEnabled) {
+                    GridOverlay()
+                }
             }
 
             when (sliderMode) {
@@ -440,18 +444,6 @@ fun CameraContent(viewModel: CameraViewModel) {
                     )
                 }
                 CameraViewModel.SliderMode.NONE -> {}
-            }
-
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showFlash,
-                enter = fadeIn(animationSpec = tween(50)),
-                exit = fadeOut(animationSpec = tween(100))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                )
             }
 
             LaunchedEffect(showFlash) {
