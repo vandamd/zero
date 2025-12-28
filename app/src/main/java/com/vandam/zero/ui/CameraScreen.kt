@@ -521,6 +521,7 @@ fun CameraContent(viewModel: CameraViewModel) {
 
             LaunchedEffect(showFlash) {
                 if (showFlash) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     delay(50)
                     viewModel.resetShutterFlash()
                 }
