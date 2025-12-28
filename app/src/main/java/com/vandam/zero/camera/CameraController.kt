@@ -276,16 +276,18 @@ class CameraController {
         }
     }
 
-    fun takePhoto() {
+    fun takePhoto(onComplete: () -> Unit = {}) {
         val imageCapture = imageCapture
         val context = context
 
         if (imageCapture == null) {
             Log.e(TAG, "takePhoto: imageCapture is null")
+            onComplete()
             return
         }
         if (context == null) {
             Log.e(TAG, "takePhoto: context is null")
+            onComplete()
             return
         }
 
@@ -329,6 +331,7 @@ class CameraController {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture completed (pending: $pendingCaptureCount)")
                     }
+                    onComplete()
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -339,6 +342,7 @@ class CameraController {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
                     }
+                    onComplete()
                 }
             }
         )

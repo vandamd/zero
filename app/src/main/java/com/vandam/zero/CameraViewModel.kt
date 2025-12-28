@@ -55,10 +55,11 @@ class CameraViewModel : ViewModel() {
     private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
     val availableFormats: StateFlow<List<Int>> = _availableFormats
 
+    private val _isSaving = MutableStateFlow(false)
+    val isSaving: StateFlow<Boolean> = _isSaving
+
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
-
-    private var lastShotTimestamp: Long = 0
 
     enum class ExposureMode {
         AUTO, MANUAL
@@ -243,30 +244,17 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onShutterButtonPress() {
-        val currentTime = System.currentTimeMillis()
-        val minDelayMs = calculateMinimumShotDelay()
-
-        if (currentTime - lastShotTimestamp < minDelayMs) {
+        if (cameraController.hasPendingCaptures()) {
             return
         }
-        lastShotTimestamp = currentTime
-        lastFocusTimestamp = currentTime
 
+        lastFocusTimestamp = System.currentTimeMillis()
         _shutterFlash.value = true
+        _isSaving.value = true
 
         viewModelScope.launch {
-            cameraController.takePhoto()
-        }
-    }
-
-    private fun calculateMinimumShotDelay(): Long {
-        return when (_exposureMode.value) {
-            ExposureMode.MANUAL -> {
-                val shutterSpeedMs = _shutterSpeedNs.value / 1_000_000
-                (shutterSpeedMs * 1.5).toLong().coerceAtLeast(200)
-            }
-            ExposureMode.AUTO -> {
-                300L
+            cameraController.takePhoto {
+                _isSaving.value = false
             }
         }
     }

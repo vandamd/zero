@@ -116,6 +116,7 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
+    val isSaving by viewModel.isSaving.collectAsState()
 
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
@@ -444,6 +445,54 @@ fun CameraContent(viewModel: CameraViewModel) {
                     )
                 }
                 CameraViewModel.SliderMode.NONE -> {}
+            }
+
+            // Top toolbar (right side of device, top when held sideways)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(60.dp),
+                verticalArrangement = Arrangement.Bottom,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(60.dp)
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isSaving) "SAVING" else "READY",
+                        color = Color.White,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 32.sp,
+                            fontFamily = publicSans,
+                            fontWeight = FontWeight.ExtraBold
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier
+                            .layout { measurable, constraints ->
+                                val placeable = measurable.measure(
+                                    constraints.copy(
+                                        minWidth = 0,
+                                        maxWidth = Int.MAX_VALUE
+                                    )
+                                )
+                                layout(placeable.height, placeable.width) {
+                                    placeable.place(
+                                        x = (placeable.height - placeable.width) / 2,
+                                        y = (placeable.width - placeable.height) / 2
+                                    )
+                                }
+                            }
+                            .graphicsLayer(
+                                rotationZ = 90f,
+                                transformOrigin = TransformOrigin(0.5f, 0.5f)
+                            )
+                    )
+                }
             }
 
             LaunchedEffect(showFlash) {
