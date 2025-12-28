@@ -266,7 +266,14 @@ class CameraController {
             }
         }
 
-        Log.d(TAG, "Orientation listener created (will be enabled on resume)")
+        // Enable immediately if the lifecycle is already resumed
+        val currentState = lifecycleOwner?.lifecycle?.currentState
+        if (currentState?.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) == true) {
+            orientationEventListener?.enable()
+            Log.d(TAG, "Orientation listener enabled (app already resumed)")
+        } else {
+            Log.d(TAG, "Orientation listener created (will be enabled on resume)")
+        }
     }
 
     fun takePhoto() {
