@@ -1,8 +1,14 @@
-# Zero
+<img src="example.png" alt="Zero Screenshots">
 
-A simple camera app for the Light Phone III.
+<p>A simple camera app for the Light Phone III.</p>
 
-<img src="/example.png" width="300">
+![GitHub License](https://img.shields.io/github/license/vandamd/zero)
+![GitHub Release](https://img.shields.io/github/v/release/vandamd/zero)
+
+## Installation
+The lastest .apk file is available in [releases](https://github.com/vandamd/zero/releases/latest).
+
+I recommend using [Obtainium](https://github.com/ImranR98/Obtainium) and adding the repository's URL to receive updates.
 
 ## Features
 - Capture images without any processing
@@ -11,12 +17,15 @@ A simple camera app for the Light Phone III.
 
 ## Greyscale Toggle
 
-Zero can automatically disable greyscale while the app is open and restore it when you leave.
+Zero can automatically disable greyscale while the app is open and restore it when you leave. 
+
+This requires granting the app special permission via ADB:
 
 ```bash
 adb shell pm grant com.vandam.zero android.permission.WRITE_SECURE_SETTINGS
 ```
 
-Once granted, the app will automatically:
-- Disable grayscale when you open the app
-- Restore grayscale when you leave or close the app
+## Support
+Zero is developed and maintained in my free time.
+
+If you find it useful, please [consider sponsoring](https://github.com/sponsors/vandamd)! :)
