@@ -2,7 +2,6 @@
 
 <p>A simple camera app for the Light Phone III.</p>
 
-![GitHub License](https://img.shields.io/github/license/vandamd/zero)
 ![GitHub Release](https://img.shields.io/github/v/release/vandamd/zero)
 
 ## Installation
