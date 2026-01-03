@@ -57,6 +57,9 @@ class CameraViewModel : ViewModel() {
     private val _outputFormat = MutableStateFlow(2)
     val outputFormat: StateFlow<Int> = _outputFormat
 
+    private val _bwMode = MutableStateFlow(false)
+    val bwMode: StateFlow<Boolean> = _bwMode
+
     private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
     val availableFormats: StateFlow<List<Int>> = _availableFormats
 
@@ -251,6 +254,7 @@ class CameraViewModel : ViewModel() {
             _isoValue.value = p.getInt("iso_value", 400)
             _shutterSpeedNs.value = p.getLong("shutter_speed_ns", 16_666_666L)
             _outputFormat.value = p.getInt("output_format", 2)
+            _bwMode.value = p.getBoolean("bw_mode", false)
         }
     }
 
@@ -263,6 +267,7 @@ class CameraViewModel : ViewModel() {
             putInt("iso_value", _isoValue.value)
             putLong("shutter_speed_ns", _shutterSpeedNs.value)
             putInt("output_format", _outputFormat.value)
+            putBoolean("bw_mode", _bwMode.value)
             apply()
         }
     }
@@ -271,15 +276,23 @@ class CameraViewModel : ViewModel() {
         return cameraController.createPreviewView(context)
     }
 
+    private val bwFormatCode = -1
+
     fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
+        // If BW mode is active, force JPEG for capture while keeping the format toggle state consistent
+        if (_bwMode.value) {
+            _outputFormat.value = 0
+        }
         cameraController.setInitialOutputFormat(_outputFormat.value)
         cameraController.setFlashEnabled(_flashEnabled.value)
+        cameraController.setBwMode(_bwMode.value)
 
         cameraController.bindCamera(
             lifecycleOwner,
             previewView,
             onFormatsAvailable = { formats ->
-                _availableFormats.value = formats
+                val withBwOption = if (formats.contains(0)) formats + bwFormatCode else formats
+                _availableFormats.value = withBwOption
             },
             onCameraReady = {
                 if (_exposureMode.value == ExposureMode.AUTO) {
@@ -296,12 +309,28 @@ class CameraViewModel : ViewModel() {
         val formats = _availableFormats.value
         if (formats.isEmpty()) return
 
-        val currentIndex = formats.indexOf(_outputFormat.value)
+        val currentOption = if (_bwMode.value) bwFormatCode else _outputFormat.value
+        val currentIndex = formats.indexOf(currentOption).takeIf { it >= 0 } ?: 0
         val nextIndex = (currentIndex + 1) % formats.size
-        val newFormat = formats[nextIndex]
+        val newOption = formats[nextIndex]
 
-        _outputFormat.value = newFormat
-        cameraController.setOutputFormat(newFormat)
+        if (newOption == bwFormatCode) {
+            _bwMode.value = true
+            _outputFormat.value = 0
+            cameraController.setOutputFormat(0)
+            cameraController.setBwMode(true)
+        } else {
+            _bwMode.value = false
+            _outputFormat.value = newOption
+            cameraController.setBwMode(false)
+            cameraController.setOutputFormat(newOption)
+        }
+        saveSettings()
+    }
+
+    fun setOutputFormat(format: Int) {
+        _outputFormat.value = format
+        cameraController.setOutputFormat(format)
         saveSettings()
     }
 
@@ -309,6 +338,7 @@ class CameraViewModel : ViewModel() {
         return when (format) {
             0 -> "JPG"
             2 -> "RAW"
+            bwFormatCode -> "BW"
             else -> "???"
         }
     }

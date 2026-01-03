@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Icon
@@ -45,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
@@ -66,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.vandam.zero.R
+import com.vandam.zero.BuildConfig
+import com.vandam.zero.camera.GrayscaleConverter
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vandam.zero.CameraViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -138,6 +143,7 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
+    val bwMode by viewModel.bwMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val capturedImageUri by viewModel.capturedImageUri.collectAsState()
@@ -349,28 +355,32 @@ fun CameraContent(viewModel: CameraViewModel) {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.toggleOutputFormat()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = viewModel.getFormatName(outputFormat),
-                        color = Color.White,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 32.sp,
-                            fontFamily = publicSans,
-                            fontWeight = FontWeight.ExtraBold
-                        ),
-                        modifier = Modifier.rotate(90f)
-                    )
-                }
+                // Hide format toggle in mono mode (JPEG only)
+                if (!BuildConfig.MONOCHROME_MODE) {
+                    Box(
+                        modifier = Modifier
+                            .size(60.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleOutputFormat()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val label = viewModel.getFormatName(if (bwMode) -1 else outputFormat)
+                        Text(
+                            text = label,
+                            color = Color.White,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 32.sp,
+                                fontFamily = publicSans,
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            modifier = Modifier.rotate(90f)
+                        )
+                    }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 IconButton(
                     onClick = {
@@ -561,7 +571,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(bottom = 16.dp),
+                        .padding(bottom = 24.dp),
                     contentAlignment = Alignment.BottomStart
                 ) {
                     Image(

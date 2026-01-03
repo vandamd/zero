@@ -26,7 +26,7 @@ jobs:
         run: ./gradlew assembleRelease
       - name: Sign APK
         uses: r0adkll/sign-android-release@v1
-        id: sign_app
+        id: sign_release
         with:
           releaseDirectory: app/build/outputs/apk/release
           signingKeyBase64: ${{ secrets.KEY_STORE_BASE64 }}
@@ -40,7 +40,7 @@ jobs:
           VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | sed 's/.*versionName = "\(.*\)".*/\1/')
           echo "VERSION=$VERSION_NAME" >> $GITHUB_ENV
       - name: Copy signed APK to workspace with versioned name
-        run: cp "${{ steps.sign_app.outputs.signedReleaseFile }}" "${{ github.workspace }}/zero_${{ env.VERSION }}.apk"
+        run: cp "${{ steps.sign_release.outputs.signedReleaseFile }}" "${{ github.workspace }}/zero_${{ env.VERSION }}.apk"
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -65,3 +65,6 @@ jobs:
           body: |
             ## What's Changed
             ${{ env.CHANGELOG }}
+            
+            ## Downloads
+            - **zero_${{ env.VERSION }}.apk** - Single build with in-app BW toggle

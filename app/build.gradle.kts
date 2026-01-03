@@ -19,7 +19,9 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-        
+
+        buildConfigField("boolean", "MONOCHROME_MODE", "false")
+
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -30,10 +32,10 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            
+
             isDebuggable = false
             isJniDebuggable = false
-            
+
             ndk {
                 debugSymbolLevel = "NONE"
             }
@@ -48,6 +50,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {

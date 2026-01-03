@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import com.vandam.zero.BuildConfig
 import android.net.Uri
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
@@ -107,6 +108,8 @@ class CameraController {
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     private var flashEnabled: Boolean = false
     private var lifecycleObserverAdded: Boolean = false
+    private var bwMode: Boolean = false
+    private var monoFlavor: Boolean = BuildConfig.MONOCHROME_MODE
 
     private var pendingCaptureCount = 0
     private val captureLock = Object()
@@ -115,6 +118,55 @@ class CameraController {
         this.context = context
         return PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+    
+    private fun applyGrayscaleFilterToPreview(previewView: PreviewView) {
+        val shouldApply = bwMode || monoFlavor
+
+        previewView.post {
+            if (!shouldApply) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    previewView.setRenderEffect(null)
+                }
+                for (i in 0 until previewView.childCount) {
+                    val child = previewView.getChildAt(i)
+                    if (child is android.view.TextureView) {
+                        child.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                    }
+                }
+                Log.d(TAG, "Cleared grayscale filter from PreviewView")
+                return@post
+            }
+
+            // Try RenderEffect for API 31+ (more reliable for camera preview)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                val colorMatrix = android.graphics.ColorMatrix(floatArrayOf(
+                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
+                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
+                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val effect = android.graphics.RenderEffect.createColorFilterEffect(
+                    android.graphics.ColorMatrixColorFilter(colorMatrix)
+                )
+                previewView.setRenderEffect(effect)
+                Log.d(TAG, "Applied grayscale RenderEffect to PreviewView")
+            } else {
+                // Fallback for older APIs - try on TextureView child
+                for (i in 0 until previewView.childCount) {
+                    val child = previewView.getChildAt(i)
+                    if (child is android.view.TextureView) {
+                        val paint = android.graphics.Paint().apply {
+                            colorFilter = GrayscaleConverter.getColorFilter()
+                        }
+                        child.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                        Log.d(TAG, "Applied grayscale filter to TextureView (legacy)")
+                        return@post
+                    }
+                }
+                Log.d(TAG, "No TextureView found for grayscale filter")
+            }
         }
     }
 
@@ -191,12 +243,15 @@ class CameraController {
             val supportsJpeg = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_JPEG)
 
             val workingFormats = mutableListOf<Int>()
-            if (supportsRaw) workingFormats.add(ImageCapture.OUTPUT_FORMAT_RAW)
+            // Mono flavor only supports JPEG (RAW can't be grayscale)
+            if (supportsRaw && !BuildConfig.MONOCHROME_MODE) {
+                workingFormats.add(ImageCapture.OUTPUT_FORMAT_RAW)
+            }
             if (supportsJpeg) workingFormats.add(ImageCapture.OUTPUT_FORMAT_JPEG)
 
             availableFormats = workingFormats
 
-            Log.d(TAG, "Available formats: RAW=$supportsRaw, JPEG=$supportsJpeg")
+            Log.d(TAG, "Available formats: RAW=$supportsRaw, JPEG=$supportsJpeg, mono=${BuildConfig.MONOCHROME_MODE}")
             Log.d(TAG, "Working formats list: $workingFormats")
 
             onFormatsAvailable(workingFormats)
@@ -210,10 +265,11 @@ class CameraController {
                 .setTargetRotation(currentRotation)
 
             if (!workingFormats.contains(currentOutputFormat)) {
-                currentOutputFormat = when {
-                    supportsRaw -> ImageCapture.OUTPUT_FORMAT_RAW
-                    supportsJpeg -> ImageCapture.OUTPUT_FORMAT_JPEG
-                    else -> ImageCapture.OUTPUT_FORMAT_JPEG
+                // In mono mode, always default to JPEG
+                currentOutputFormat = if (!BuildConfig.MONOCHROME_MODE && supportsRaw) {
+                    ImageCapture.OUTPUT_FORMAT_RAW
+                } else {
+                    ImageCapture.OUTPUT_FORMAT_JPEG
                 }
             }
 
@@ -247,6 +303,9 @@ class CameraController {
                     imageCapture
                 )
                 Log.d(TAG, "Camera bound successfully with rotation: $currentRotation, flash: $flashEnabled")
+                
+                // Apply grayscale filter after camera is bound
+                applyGrayscaleFilterToPreview(previewView)
 
                 onCameraReady()
             } catch (exc: Exception) {
@@ -336,17 +395,19 @@ class CameraController {
                         camera?.cameraControl?.enableTorch(false)
                     }
                     
-                    val previewBitmap = extractPreviewBitmap(image)
-                    
+                    // Read JPEG bytes FIRST, before extracting preview (which consumes the buffer)
                     val jpegBytes = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_JPEG) {
                         val buffer = image.planes[0].buffer
+                        buffer.rewind() // Ensure we're at the start
                         val bytes = ByteArray(buffer.remaining())
                         buffer.get(bytes)
+                        buffer.rewind() // Reset for extractPreviewBitmap
                         bytes
                     } else {
                         null
                     }
                     
+                    val previewBitmap = extractPreviewBitmap(image)
                     val rotation = image.imageInfo.rotationDegrees
                     image.close()
                     
@@ -398,13 +459,20 @@ class CameraController {
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
         
         val rotation = image.imageInfo.rotationDegrees
-        return if (rotation != 0) {
+        val rotatedBitmap = if (rotation != 0) {
             val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
             Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
                 if (it != bitmap) bitmap.recycle()
             }
         } else {
             bitmap
+        }
+        
+        // Apply grayscale conversion for mono flavor or BW mode
+        return if (monoFlavor || bwMode) {
+            GrayscaleConverter.toGrayscale(rotatedBitmap, recycleSource = true)
+        } else {
+            rotatedBitmap
         }
     }
 
@@ -426,6 +494,13 @@ class CameraController {
         }
 
         coroutineScope.launch(Dispatchers.IO) {
+            // For mono flavor or BW mode, convert to grayscale before saving
+            val finalBytes = if (monoFlavor || bwMode) {
+                convertToGrayscaleJpeg(jpegBytes, rotation)
+            } else {
+                jpegBytes
+            }
+            
             val uri = context.contentResolver.insert(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 contentValues
@@ -433,7 +508,7 @@ class CameraController {
             
             if (uri != null) {
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    outputStream.write(jpegBytes)
+                    outputStream.write(finalBytes)
                 }
             }
             
@@ -445,6 +520,42 @@ class CameraController {
             withContext(Dispatchers.Main) {
                 onComplete(uri)
             }
+        }
+    }
+    
+    /**
+     * Converts JPEG bytes to grayscale using BT.709 coefficients.
+     */
+    private fun convertToGrayscaleJpeg(jpegBytes: ByteArray, rotation: Int): ByteArray {
+        return try {
+            // Decode the JPEG - must use ARGB_8888 for Canvas drawing
+            val decodeOptions = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = false
+            }
+            val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
+            if (original == null) {
+                Log.e(TAG, "Grayscale: failed to decode JPEG")
+                return jpegBytes
+            }
+            
+            // Apply grayscale conversion
+            val grayscale = GrayscaleConverter.toGrayscale(original, recycleSource = true)
+            
+            // Re-encode to JPEG
+            val outputStream = ByteArrayOutputStream()
+            val success = grayscale.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+            grayscale.recycle()
+            
+            if (success && outputStream.size() > 0) {
+                outputStream.toByteArray()
+            } else {
+                Log.e(TAG, "Grayscale: compression failed")
+                jpegBytes
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Grayscale: exception during conversion", e)
+            jpegBytes
         }
     }
 
@@ -604,6 +715,23 @@ class CameraController {
             if (owner != null && preview != null) {
                 Log.d(TAG, "Rebinding camera with format $format")
                 bindCamera(owner, preview)
+            }
+        }
+    }
+
+    fun setBwMode(enabled: Boolean) {
+        bwMode = enabled
+        monoFlavor = BuildConfig.MONOCHROME_MODE
+        Log.d(TAG, "BW mode set to: $enabled")
+        rebindJob?.cancel()
+        rebindJob = coroutineScope.launch {
+            delay(200)
+            val owner = lifecycleOwner
+            val preview = previewView
+            if (owner != null && preview != null) {
+                Log.d(TAG, "Rebinding camera with BW mode: $enabled")
+                bindCamera(owner, preview)
+                applyGrayscaleFilterToPreview(preview)
             }
         }
     }
