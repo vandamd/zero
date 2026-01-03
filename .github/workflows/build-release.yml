@@ -65,6 +65,3 @@ jobs:
           body: |
             ## What's Changed
             ${{ env.CHANGELOG }}
-            
-            ## Downloads
-            - **zero_${{ env.VERSION }}.apk** - Single build with in-app BW toggle
