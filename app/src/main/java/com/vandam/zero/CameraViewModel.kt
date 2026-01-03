@@ -211,8 +211,7 @@ class CameraViewModel : ViewModel() {
         _sliderMode.value = SliderMode.NONE
 
         if (mode == ExposureMode.AUTO) {
-            cameraController.setAutoExposure(true)
-            cameraController.setExposureCompensation(_exposureValue.value)
+            cameraController.setAutoExposure(true, _exposureValue.value)
         } else {
             cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         }
@@ -314,8 +313,7 @@ class CameraViewModel : ViewModel() {
             },
             onCameraReady = {
                 if (_exposureMode.value == ExposureMode.AUTO) {
-                    cameraController.setAutoExposure(true)
-                    cameraController.setExposureCompensation(_exposureValue.value)
+                    cameraController.setAutoExposure(true, _exposureValue.value)
                 } else {
                     cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
                 }

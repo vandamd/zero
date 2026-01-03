@@ -114,6 +114,8 @@ class CameraController {
     private var pendingCaptureCount = 0
     private val captureLock = Object()
 
+    private var storedOnCameraReady: (() -> Unit)? = null
+
     fun createPreviewView(context: Context): PreviewView {
         this.context = context
         return PreviewView(context).apply {
@@ -179,10 +181,15 @@ class CameraController {
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView,
         onFormatsAvailable: (List<Int>) -> Unit = {},
-        onCameraReady: () -> Unit = {}
+        onCameraReady: (() -> Unit)? = null
     ) {
         this.lifecycleOwner = lifecycleOwner
         this.previewView = previewView
+
+        // Store the callback for rebinds, only if a new one is provided
+        if (onCameraReady != null) {
+            storedOnCameraReady = onCameraReady
+        }
 
         if (delayedLifecycleOwner == null) {
             delayedLifecycleOwner = DelayedLifecycleOwner(lifecycleOwner).apply {
@@ -307,7 +314,7 @@ class CameraController {
                 // Apply grayscale filter after camera is bound
                 applyGrayscaleFilterToPreview(previewView)
 
-                onCameraReady()
+                storedOnCameraReady?.invoke()
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -679,7 +686,7 @@ class CameraController {
     }
 
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
-    fun setAutoExposure(enabled: Boolean) {
+    fun setAutoExposure(enabled: Boolean, exposureCompensation: Float? = null) {
         val cameraControl = camera?.cameraControl ?: return
         val camera2Control = Camera2CameraControl.from(cameraControl)
 
@@ -691,8 +698,13 @@ class CameraController {
                 .clearCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY)
                 .clearCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME)
                 .build()
-            camera2Control.setCaptureRequestOptions(captureRequestOptions)
-            Log.d(TAG, "Auto exposure enabled, noise reduction OFF")
+            camera2Control.setCaptureRequestOptions(captureRequestOptions).addListener({
+                // Apply exposure compensation after AE mode is set
+                if (exposureCompensation != null) {
+                    setExposureCompensation(exposureCompensation)
+                }
+            }, ContextCompat.getMainExecutor(context!!))
+            Log.d(TAG, "Auto exposure enabled, noise reduction OFF, pending EC=$exposureCompensation")
         }
     }
 
