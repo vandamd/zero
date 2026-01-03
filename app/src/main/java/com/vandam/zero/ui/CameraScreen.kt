@@ -332,10 +332,12 @@ fun CameraContent(viewModel: CameraViewModel) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                val isBusy = isCapturing || isSaving
+
                 Box(
                     modifier = Modifier
                         .size(60.dp)
-                        .clickable {
+                        .clickable(enabled = !isBusy) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.toggleExposureMode()
                         },
@@ -360,7 +362,7 @@ fun CameraContent(viewModel: CameraViewModel) {
                     Box(
                         modifier = Modifier
                             .size(60.dp)
-                            .clickable {
+                            .clickable(enabled = !isBusy) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.toggleOutputFormat()
                             },
