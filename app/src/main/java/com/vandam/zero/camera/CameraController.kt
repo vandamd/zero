@@ -381,6 +381,13 @@ class CameraController {
             camera?.cameraControl?.enableTorch(true)
         }
 
+        // For RAW mode, go directly to storage capture (single capture path)
+        if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) {
+            takePhotoToStorageWithCallbacks(onCaptureStarted, onPreviewReady, onComplete)
+            return
+        }
+
+        // For JPEG mode, use in-memory capture for preview
         imageCapture.takePicture(
             cameraExecutor,
             object : ImageCapture.OnImageCapturedCallback() {
@@ -396,16 +403,11 @@ class CameraController {
                     }
                     
                     // Read JPEG bytes FIRST, before extracting preview (which consumes the buffer)
-                    val jpegBytes = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_JPEG) {
-                        val buffer = image.planes[0].buffer
-                        buffer.rewind() // Ensure we're at the start
-                        val bytes = ByteArray(buffer.remaining())
-                        buffer.get(bytes)
-                        buffer.rewind() // Reset for extractPreviewBitmap
-                        bytes
-                    } else {
-                        null
-                    }
+                    val buffer = image.planes[0].buffer
+                    buffer.rewind() // Ensure we're at the start
+                    val jpegBytes = ByteArray(buffer.remaining())
+                    buffer.get(jpegBytes)
+                    buffer.rewind() // Reset for extractPreviewBitmap
                     
                     val previewBitmap = extractPreviewBitmap(image)
                     val rotation = image.imageInfo.rotationDegrees
@@ -413,11 +415,7 @@ class CameraController {
                     
                     onPreviewReady(previewBitmap)
                     
-                    if (jpegBytes != null && currentOutputFormat == ImageCapture.OUTPUT_FORMAT_JPEG) {
-                        saveJpegToStorage(context, jpegBytes, rotation, onComplete)
-                    } else {
-                        takePhotoToStorage(onComplete)
-                    }
+                    saveJpegToStorage(context, jpegBytes, rotation, onComplete)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -559,7 +557,11 @@ class CameraController {
         }
     }
 
-    private fun takePhotoToStorage(onComplete: (Uri?) -> Unit) {
+    private fun takePhotoToStorageWithCallbacks(
+        onCaptureStarted: () -> Unit,
+        onPreviewReady: (Bitmap?) -> Unit,
+        onComplete: (Uri?) -> Unit
+    ) {
         val imageCapture = imageCapture ?: return
         val context = context ?: return
         
@@ -591,10 +593,24 @@ class CameraController {
             outputOptions,
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
+                override fun onCaptureStarted() {
+                    ContextCompat.getMainExecutor(context).execute {
+                        onCaptureStarted()
+                    }
+                }
+
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (flashEnabled) {
+                        camera?.cameraControl?.enableTorch(false)
+                    }
+                    
                     val uri = outputFileResults.savedUri
                     val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
                     Log.d(TAG, "$formatName photo saved: $uri")
+
+                    // For RAW, we don't have a preview bitmap - signal this with null
+                    // The ViewModel will extract the DNG thumbnail after save completes
+                    onPreviewReady(null)
 
                     synchronized(captureLock) {
                         pendingCaptureCount--
@@ -604,6 +620,10 @@ class CameraController {
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    if (flashEnabled) {
+                        camera?.cameraControl?.enableTorch(false)
+                    }
+                    
                     Log.e(TAG, "Capture failed", exception)
                     postToast("Capture failed: ${exception.message}")
 
@@ -611,6 +631,7 @@ class CameraController {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
                     }
+                    onPreviewReady(null)
                     onComplete(null)
                 }
             }
