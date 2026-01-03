@@ -36,6 +36,12 @@ class CameraViewModel : ViewModel() {
     private val _gridEnabled = MutableStateFlow(false)
     val gridEnabled: StateFlow<Boolean> = _gridEnabled
 
+    private val _previewEnabled = MutableStateFlow(true)
+    val previewEnabled: StateFlow<Boolean> = _previewEnabled
+
+    private val _toastMessage = MutableStateFlow<String?>(null)
+    val toastMessage: StateFlow<String?> = _toastMessage
+
     private val _flashEnabled = MutableStateFlow(false)
     val flashEnabled: StateFlow<Boolean> = _flashEnabled
 
@@ -151,6 +157,16 @@ class CameraViewModel : ViewModel() {
         saveSettings()
     }
 
+    fun togglePreview() {
+        _previewEnabled.value = !_previewEnabled.value
+        _toastMessage.value = if (_previewEnabled.value) "PREVIEW ON" else "PREVIEW OFF"
+        saveSettings()
+    }
+
+    fun clearToastMessage() {
+        _toastMessage.value = null
+    }
+
     fun toggleFlash() {
         _flashEnabled.value = !_flashEnabled.value
         cameraController.setFlashEnabled(_flashEnabled.value)
@@ -248,6 +264,7 @@ class CameraViewModel : ViewModel() {
     private fun loadSettings() {
         prefs?.let { p ->
             _gridEnabled.value = p.getBoolean("grid_enabled", false)
+            _previewEnabled.value = p.getBoolean("preview_enabled", true)
             _flashEnabled.value = p.getBoolean("flash_enabled", false)
             _exposureMode.value = ExposureMode.valueOf(p.getString("exposure_mode", "AUTO") ?: "AUTO")
             _exposureValue.value = p.getFloat("exposure_value", 0f)
@@ -261,6 +278,7 @@ class CameraViewModel : ViewModel() {
     private fun saveSettings() {
         prefs?.edit()?.apply {
             putBoolean("grid_enabled", _gridEnabled.value)
+            putBoolean("preview_enabled", _previewEnabled.value)
             putBoolean("flash_enabled", _flashEnabled.value)
             putString("exposure_mode", _exposureMode.value.name)
             putFloat("exposure_value", _exposureValue.value)

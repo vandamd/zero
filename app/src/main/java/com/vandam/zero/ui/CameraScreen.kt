@@ -143,6 +143,8 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
+    val previewEnabled by viewModel.previewEnabled.collectAsState()
+    val toastMessage by viewModel.toastMessage.collectAsState()
     val bwMode by viewModel.bwMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
@@ -406,12 +408,22 @@ fun CameraContent(viewModel: CameraViewModel) {
 
                 Spacer(modifier = Modifier.height(0.dp))
 
-                IconButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.toggleGrid()
-                    },
-                    modifier = Modifier.size(60.dp)
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.toggleGrid()
+                                },
+                                onLongPress = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.togglePreview()
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         painter = painterResource(
@@ -515,9 +527,57 @@ fun CameraContent(viewModel: CameraViewModel) {
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
                     .width(60.dp),
-                verticalArrangement = Arrangement.Bottom,
+                verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Toast message at top (appears at start when held sideways)
+                Box(
+                    modifier = Modifier
+                        .width(60.dp)
+                        .height(200.dp)
+                        .padding(top = 16.dp),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    toastMessage?.let { message ->
+                        Text(
+                            text = message,
+                            color = Color.White,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 32.sp,
+                                fontFamily = publicSans,
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(
+                                        constraints.copy(
+                                            minWidth = 0,
+                                            maxWidth = Int.MAX_VALUE
+                                        )
+                                    )
+                                    layout(placeable.height, placeable.width) {
+                                        placeable.place(
+                                            x = (placeable.height - placeable.width) / 2,
+                                            y = (placeable.width - placeable.height) / 2
+                                        )
+                                    }
+                                }
+                                .graphicsLayer(
+                                    rotationZ = 90f,
+                                    transformOrigin = TransformOrigin(0.5f, 0.5f)
+                                )
+                        )
+
+                        LaunchedEffect(message) {
+                            delay(1500)
+                            viewModel.clearToastMessage()
+                        }
+                    }
+                }
+
+                // Status at bottom
                 Box(
                     modifier = Modifier
                         .width(60.dp)
@@ -569,28 +629,30 @@ fun CameraContent(viewModel: CameraViewModel) {
                 }
             }
 
-            capturedImageBitmap?.let { bitmap ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 24.dp),
-                    contentAlignment = Alignment.BottomStart
-                ) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Captured photo",
+            if (previewEnabled) {
+                capturedImageBitmap?.let { bitmap ->
+                    Box(
                         modifier = Modifier
-                            .size(200.dp)
-                            .then(
-                                if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
-                            ),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                    )
-                }
+                            .fillMaxSize()
+                            .padding(bottom = 24.dp),
+                        contentAlignment = Alignment.BottomStart
+                    ) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Captured photo",
+                            modifier = Modifier
+                                .size(200.dp)
+                                .then(
+                                    if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
+                                ),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                        )
+                    }
 
-                LaunchedEffect(bitmap) {
-                    delay(800)
-                    viewModel.clearCapturedImageUri()
+                    LaunchedEffect(bitmap) {
+                        delay(800)
+                        viewModel.clearCapturedImageUri()
+                    }
                 }
             }
 
