@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -31,6 +32,8 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import coil.compose.rememberAsyncImagePainter
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -135,7 +138,11 @@ fun CameraContent(viewModel: CameraViewModel) {
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
+    val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
+    val capturedImageUri by viewModel.capturedImageUri.collectAsState()
+    val capturedImageBitmap by viewModel.capturedImageBitmap.collectAsState()
+    val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
 
     val publicSans = FontFamily(
         Font(R.font.publicsans_variablefont_wght)
@@ -506,7 +513,11 @@ fun CameraContent(viewModel: CameraViewModel) {
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (isSaving) "SAVING" else "READY",
+                        text = when {
+                            isCapturing -> "HOLD"
+                            isSaving -> "SAVING"
+                            else -> "READY"
+                        },
                         color = Color.White,
                         style = androidx.compose.ui.text.TextStyle(
                             fontSize = 32.sp,
@@ -543,6 +554,31 @@ fun CameraContent(viewModel: CameraViewModel) {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     delay(50)
                     viewModel.resetShutterFlash()
+                }
+            }
+
+            capturedImageBitmap?.let { bitmap ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 16.dp),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Captured photo",
+                        modifier = Modifier
+                            .size(200.dp)
+                            .then(
+                                if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
+                            ),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
+                }
+
+                LaunchedEffect(bitmap) {
+                    delay(800)
+                    viewModel.clearCapturedImageUri()
                 }
             }
 

@@ -2,6 +2,10 @@ package com.vandam.zero.camera
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.net.Uri
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.os.Build
@@ -19,6 +23,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -28,6 +33,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -179,6 +185,7 @@ class CameraController {
             Log.d(TAG, "Supported formats from device: $supportedFormats")
             Log.d(TAG, "OUTPUT_FORMAT_JPEG = ${ImageCapture.OUTPUT_FORMAT_JPEG}")
             Log.d(TAG, "OUTPUT_FORMAT_RAW = ${ImageCapture.OUTPUT_FORMAT_RAW}")
+            Log.d(TAG, "ZSL supported: ${cameraInfo.isZslSupported}")
 
             val supportsRaw = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_RAW)
             val supportsJpeg = supportedFormats.contains(ImageCapture.OUTPUT_FORMAT_JPEG)
@@ -196,8 +203,10 @@ class CameraController {
 
             currentRotation = previewView.display?.rotation ?: Surface.ROTATION_0
 
+            val captureMode = ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+
             val builder = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setCaptureMode(captureMode)
                 .setTargetRotation(currentRotation)
 
             if (!workingFormats.contains(currentOutputFormat)) {
@@ -209,7 +218,12 @@ class CameraController {
             }
 
             val formatName = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_RAW) "RAW" else "JPEG"
-            Log.d(TAG, "Using output format: $formatName")
+            val modeName = when (captureMode) {
+                ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG -> "ZSL"
+                ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY -> "MINIMIZE_LATENCY"
+                else -> "MAXIMIZE_QUALITY"
+            }
+            Log.d(TAG, "Using output format: $formatName, capture mode: $modeName")
 
             builder.setOutputFormat(currentOutputFormat)
 
@@ -266,7 +280,6 @@ class CameraController {
             }
         }
 
-        // Enable immediately if the lifecycle is already resumed
         val currentState = lifecycleOwner?.lifecycle?.currentState
         if (currentState?.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) == true) {
             orientationEventListener?.enable()
@@ -276,18 +289,24 @@ class CameraController {
         }
     }
 
-    fun takePhoto(onComplete: () -> Unit = {}) {
+    fun takePhoto(
+        onCaptureStarted: () -> Unit = {},
+        onPreviewReady: (Bitmap?) -> Unit = {},
+        onComplete: (Uri?) -> Unit = {}
+    ) {
         val imageCapture = imageCapture
         val context = context
 
         if (imageCapture == null) {
             Log.e(TAG, "takePhoto: imageCapture is null")
-            onComplete()
+            onPreviewReady(null)
+            onComplete(null)
             return
         }
         if (context == null) {
             Log.e(TAG, "takePhoto: context is null")
-            onComplete()
+            onPreviewReady(null)
+            onComplete(null)
             return
         }
 
@@ -295,6 +314,145 @@ class CameraController {
             pendingCaptureCount++
             Log.d(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
         }
+
+        val flashMode = if (flashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+        imageCapture.flashMode = flashMode
+        
+        if (flashEnabled) {
+            camera?.cameraControl?.enableTorch(true)
+        }
+
+        imageCapture.takePicture(
+            cameraExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureStarted() {
+                    ContextCompat.getMainExecutor(context).execute {
+                        onCaptureStarted()
+                    }
+                }
+
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    if (flashEnabled) {
+                        camera?.cameraControl?.enableTorch(false)
+                    }
+                    
+                    val previewBitmap = extractPreviewBitmap(image)
+                    
+                    val jpegBytes = if (currentOutputFormat == ImageCapture.OUTPUT_FORMAT_JPEG) {
+                        val buffer = image.planes[0].buffer
+                        val bytes = ByteArray(buffer.remaining())
+                        buffer.get(bytes)
+                        bytes
+                    } else {
+                        null
+                    }
+                    
+                    val rotation = image.imageInfo.rotationDegrees
+                    image.close()
+                    
+                    onPreviewReady(previewBitmap)
+                    
+                    if (jpegBytes != null && currentOutputFormat == ImageCapture.OUTPUT_FORMAT_JPEG) {
+                        saveJpegToStorage(context, jpegBytes, rotation, onComplete)
+                    } else {
+                        takePhotoToStorage(onComplete)
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    if (flashEnabled) {
+                        camera?.cameraControl?.enableTorch(false)
+                    }
+                    
+                    Log.e(TAG, "Capture failed", exception)
+                    postToast("Capture failed: ${exception.message}")
+                    
+                    synchronized(captureLock) {
+                        pendingCaptureCount--
+                        Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
+                    }
+                    onPreviewReady(null)
+                    onComplete(null)
+                }
+            }
+        )
+    }
+
+    private fun extractPreviewBitmap(image: ImageProxy): Bitmap? {
+        val buffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        
+        val options = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        
+        val targetSize = 400
+        val sampleSize = maxOf(1, minOf(options.outWidth, options.outHeight) / targetSize)
+        
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+        }
+        
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
+        
+        val rotation = image.imageInfo.rotationDegrees
+        return if (rotation != 0) {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+                if (it != bitmap) bitmap.recycle()
+            }
+        } else {
+            bitmap
+        }
+    }
+
+    private fun saveJpegToStorage(
+        context: Context,
+        jpegBytes: ByteArray,
+        rotation: Int,
+        onComplete: (Uri?) -> Unit
+    ) {
+        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+            .format(System.currentTimeMillis()) + ".jpg"
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
+            }
+        }
+
+        coroutineScope.launch(Dispatchers.IO) {
+            val uri = context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues
+            )
+            
+            if (uri != null) {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(jpegBytes)
+                }
+            }
+            
+            synchronized(captureLock) {
+                pendingCaptureCount--
+                Log.d(TAG, "Capture completed (pending: $pendingCaptureCount)")
+            }
+            
+            withContext(Dispatchers.Main) {
+                onComplete(uri)
+            }
+        }
+    }
+
+    private fun takePhotoToStorage(onComplete: (Uri?) -> Unit) {
+        val imageCapture = imageCapture ?: return
+        val context = context ?: return
+        
+        imageCapture.flashMode = if (flashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
 
         val (fileExtension, mimeType) = when (currentOutputFormat) {
             ImageCapture.OUTPUT_FORMAT_RAW -> ".dng" to "image/x-adobe-dng"
@@ -331,7 +489,7 @@ class CameraController {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture completed (pending: $pendingCaptureCount)")
                     }
-                    onComplete()
+                    onComplete(uri)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -342,7 +500,7 @@ class CameraController {
                         pendingCaptureCount--
                         Log.d(TAG, "Capture failed (pending: $pendingCaptureCount)")
                     }
-                    onComplete()
+                    onComplete(null)
                 }
             }
         )
@@ -396,11 +554,13 @@ class CameraController {
         if (enabled) {
             val captureRequestOptions = CaptureRequestOptions.Builder()
                 .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                .setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                .setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                 .clearCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY)
                 .clearCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME)
                 .build()
             camera2Control.setCaptureRequestOptions(captureRequestOptions)
-            Log.d(TAG, "Auto exposure enabled")
+            Log.d(TAG, "Auto exposure enabled, noise reduction OFF")
         }
     }
 
@@ -413,10 +573,12 @@ class CameraController {
             .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
             .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTimeNs)
+            .setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+            .setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
             .build()
 
         camera2Control.setCaptureRequestOptions(captureRequestOptions)
-        Log.d(TAG, "Set manual exposure: ISO=$iso, shutter=${exposureTimeNs}ns")
+        Log.d(TAG, "Set manual exposure: ISO=$iso, shutter=${exposureTimeNs}ns, noise reduction OFF")
     }
 
     fun setOutputFormat(format: Int) {
@@ -450,10 +612,16 @@ class CameraController {
         flashEnabled = enabled
         Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
 
-        imageCapture?.flashMode = if (enabled) {
-            ImageCapture.FLASH_MODE_ON
+        val capture = imageCapture
+        if (capture != null) {
+            capture.flashMode = if (enabled) {
+                ImageCapture.FLASH_MODE_ON
+            } else {
+                ImageCapture.FLASH_MODE_OFF
+            }
+            Log.d(TAG, "Flash mode applied to imageCapture: ${capture.flashMode}")
         } else {
-            ImageCapture.FLASH_MODE_OFF
+            Log.d(TAG, "Flash setting saved, will be applied when camera binds")
         }
     }
 

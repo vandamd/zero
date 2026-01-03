@@ -2,6 +2,11 @@ package com.vandam.zero
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.ExifInterface
+import android.net.Uri
+import android.util.Log
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
@@ -58,6 +63,20 @@ class CameraViewModel : ViewModel() {
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
 
+    private val _isCapturing = MutableStateFlow(false)
+    val isCapturing: StateFlow<Boolean> = _isCapturing
+
+    private val _capturedImageUri = MutableStateFlow<Uri?>(null)
+    val capturedImageUri: StateFlow<Uri?> = _capturedImageUri
+
+    private val _capturedImageBitmap = MutableStateFlow<Bitmap?>(null)
+    val capturedImageBitmap: StateFlow<Bitmap?> = _capturedImageBitmap
+
+    private val _capturedImageIsPortrait = MutableStateFlow(false)
+    val capturedImageIsPortrait: StateFlow<Boolean> = _capturedImageIsPortrait
+
+    private var appContext: Context? = null
+
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
 
@@ -71,6 +90,44 @@ class CameraViewModel : ViewModel() {
 
     fun resetShutterFlash() {
         _shutterFlash.value = false
+    }
+
+    fun setCapturedImageUri(uri: Uri?) {
+        _capturedImageUri.value = uri
+    }
+
+    fun clearCapturedImageUri() {
+        _capturedImageUri.value = null
+        _capturedImageBitmap.value = null
+        _capturedImageIsPortrait.value = false
+    }
+
+    private fun extractDngThumbnail(uri: Uri): Bitmap? {
+        val context = appContext ?: return null
+        context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            val exif = ExifInterface(inputStream)
+            val thumbnail = exif.thumbnailBitmap
+            if (thumbnail != null) {
+                return thumbnail
+            }
+        }
+        
+        val options = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            BitmapFactory.decodeStream(inputStream, null, options)
+        }
+        
+        val targetSize = 400
+        val sampleSize = maxOf(1, minOf(options.outWidth, options.outHeight) / targetSize)
+        
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+        }
+        return context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            BitmapFactory.decodeStream(inputStream, null, decodeOptions)
+        }
     }
 
     fun showCrosshair(x: Float, y: Float) {
@@ -178,6 +235,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun initialize(context: Context) {
+        appContext = context.applicationContext
         if (prefs == null) {
             prefs = context.getSharedPreferences("camera_settings", Context.MODE_PRIVATE)
             loadSettings()
@@ -261,13 +319,35 @@ class CameraViewModel : ViewModel() {
         }
 
         lastFocusTimestamp = System.currentTimeMillis()
-        _shutterFlash.value = true
-        _isSaving.value = true
+        _isCapturing.value = true
 
         viewModelScope.launch {
-            cameraController.takePhoto {
-                _isSaving.value = false
-            }
+            cameraController.takePhoto(
+                onCaptureStarted = {
+                    _isCapturing.value = false
+                    _isSaving.value = true
+                    _shutterFlash.value = true
+                },
+                onPreviewReady = { bitmap ->
+                    if (bitmap != null) {
+                        _capturedImageIsPortrait.value = bitmap.height > bitmap.width
+                        _capturedImageBitmap.value = bitmap
+                        if (_outputFormat.value != 2) {
+                            _isSaving.value = false
+                        }
+                    }
+                },
+                onComplete = { uri ->
+                    if (uri != null && _outputFormat.value == 2) {
+                        val thumbnail = extractDngThumbnail(uri)
+                        if (thumbnail != null) {
+                            _capturedImageIsPortrait.value = thumbnail.height > thumbnail.width
+                            _capturedImageBitmap.value = thumbnail
+                        }
+                        _isSaving.value = false
+                    }
+                }
+            )
         }
     }
 

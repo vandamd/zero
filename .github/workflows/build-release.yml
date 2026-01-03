@@ -46,8 +46,22 @@ jobs:
         with:
           name: app-release
           path: ${{ github.workspace }}/zero_${{ env.VERSION }}.apk
+      - name: Generate changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges)
+          else
+            CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          fi
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "$CHANGELOG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ github.workspace }}/zero_${{ env.VERSION }}.apk
           tag_name: v${{ env.VERSION }}
+          body: |
+            ## What's Changed
+            ${{ env.CHANGELOG }}
