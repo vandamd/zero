@@ -375,20 +375,22 @@ class CameraViewModel : ViewModel() {
                     _shutterFlash.value = true
                 },
                 onPreviewReady = { bitmap ->
-                    if (bitmap != null) {
+                    if (bitmap != null && _previewEnabled.value) {
                         _capturedImageIsPortrait.value = bitmap.height > bitmap.width
                         _capturedImageBitmap.value = bitmap
-                        if (_outputFormat.value != 2) {
-                            _isSaving.value = false
-                        }
+                    }
+                    if (_outputFormat.value != 2) {
+                        _isSaving.value = false
                     }
                 },
                 onComplete = { uri ->
                     if (uri != null && _outputFormat.value == 2) {
-                        val thumbnail = extractDngThumbnail(uri)
-                        if (thumbnail != null) {
-                            _capturedImageIsPortrait.value = thumbnail.height > thumbnail.width
-                            _capturedImageBitmap.value = thumbnail
+                        if (_previewEnabled.value) {
+                            val thumbnail = extractDngThumbnail(uri)
+                            if (thumbnail != null) {
+                                _capturedImageIsPortrait.value = thumbnail.height > thumbnail.width
+                                _capturedImageBitmap.value = thumbnail
+                            }
                         }
                         _isSaving.value = false
                     }
