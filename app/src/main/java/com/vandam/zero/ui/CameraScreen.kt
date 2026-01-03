@@ -581,8 +581,9 @@ fun CameraContent(viewModel: CameraViewModel) {
                 Box(
                     modifier = Modifier
                         .width(60.dp)
-                        .height(120.dp),
-                    contentAlignment = Alignment.Center
+                        .height(120.dp)
+                        .padding(bottom = 16.dp),
+                    contentAlignment = Alignment.BottomCenter
                 ) {
                     Text(
                         text = when {
