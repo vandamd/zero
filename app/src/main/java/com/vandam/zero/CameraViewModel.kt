@@ -80,6 +80,9 @@ class CameraViewModel : ViewModel() {
     private val _cameraHidden = MutableStateFlow(false)
     val cameraHidden: StateFlow<Boolean> = _cameraHidden
 
+    private val _redTextMode = MutableStateFlow(false)
+    val redTextMode: StateFlow<Boolean> = _redTextMode
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
 
@@ -219,6 +222,12 @@ class CameraViewModel : ViewModel() {
         _toastMessage.value = if (_cameraHidden.value) "VIEWFINDER OFF" else "VIEWFINDER ON"
     }
 
+    fun toggleRedTextMode() {
+        _redTextMode.value = !_redTextMode.value
+        _toastMessage.value = if (_redTextMode.value) "RED MODE ON" else "RED MODE OFF"
+        saveSettings()
+    }
+
     fun toggleExposurePanel() {
         _sliderMode.value =
             if (_sliderMode.value == SliderMode.EXPOSURE) {
@@ -323,6 +332,7 @@ class CameraViewModel : ViewModel() {
             _bwMode.value = p.getBoolean("bw_mode", false)
             _colorMode.value = p.getBoolean("color_mode_bw", false)
             _isFastMode.value = p.getBoolean("fast_mode", false)
+            _redTextMode.value = p.getBoolean("red_text_mode", false)
         }
     }
 
@@ -339,6 +349,7 @@ class CameraViewModel : ViewModel() {
             putBoolean("bw_mode", _bwMode.value)
             putBoolean("color_mode_bw", _colorMode.value)
             putBoolean("fast_mode", _isFastMode.value)
+            putBoolean("red_text_mode", _redTextMode.value)
             apply()
         }
     }

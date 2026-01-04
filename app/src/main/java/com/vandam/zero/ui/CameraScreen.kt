@@ -178,10 +178,15 @@ private data class CameraUiState(
     val capturedImageIsPortrait: Boolean,
     val isFastMode: Boolean,
     val cameraHidden: Boolean,
+    val redTextMode: Boolean,
 ) {
     val isBusy: Boolean get() = isCapturing || isSaving
     val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
     val exposureText: String get() = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
+    val textColor: androidx.compose.ui.graphics.Color
+        get() = if (redTextMode) CameraColors.red else CameraColors.onSurface
+    val textColorVariant: androidx.compose.ui.graphics.Color
+        get() = if (redTextMode) CameraColors.redVariant else CameraColors.onSurfaceVariant
 }
 
 /**
@@ -209,6 +214,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
     val isFastMode by viewModel.isFastMode.collectAsState()
     val cameraHidden by viewModel.cameraHidden.collectAsState()
+    val redTextMode by viewModel.redTextMode.collectAsState()
 
     return CameraUiState(
         showFlash = showFlash,
@@ -231,6 +237,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         capturedImageIsPortrait = capturedImageIsPortrait,
         isFastMode = isFastMode,
         cameraHidden = cameraHidden,
+        redTextMode = redTextMode,
     )
 }
 
@@ -259,6 +266,8 @@ private fun LeftToolbar(
                 AutoExposureControls(
                     exposureText = uiState.exposureText,
                     isActive = uiState.sliderMode == CameraViewModel.SliderMode.EXPOSURE,
+                    activeColor = uiState.textColor,
+                    inactiveColor = uiState.textColorVariant,
                     onTap = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         viewModel.toggleExposurePanel()
@@ -275,6 +284,8 @@ private fun LeftToolbar(
                     isoValue = uiState.isoValue,
                     shutterSpeedNs = uiState.shutterSpeedNs,
                     sliderMode = uiState.sliderMode,
+                    activeColor = uiState.textColor,
+                    inactiveColor = uiState.textColorVariant,
                     viewModel = viewModel,
                     haptic = haptic,
                 )
@@ -297,10 +308,12 @@ private fun LeftToolbar(
 private fun AutoExposureControls(
     exposureText: String,
     isActive: Boolean,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
 ) {
-    val textColor = if (isActive) CameraColors.onSurface else CameraColors.onSurfaceVariant
+    val textColor = if (isActive) activeColor else inactiveColor
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -345,6 +358,8 @@ private fun ManualExposureControls(
     isoValue: Int,
     shutterSpeedNs: Long,
     sliderMode: CameraViewModel.SliderMode,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
     viewModel: CameraViewModel,
     haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
 ) {
@@ -376,9 +391,9 @@ private fun ManualExposureControls(
                 style = CameraTypography.toolbarText,
                 color =
                     if (sliderMode == CameraViewModel.SliderMode.ISO) {
-                        CameraColors.onSurface
+                        activeColor
                     } else {
-                        CameraColors.onSurfaceVariant
+                        inactiveColor
                     },
             )
         }
@@ -407,9 +422,9 @@ private fun ManualExposureControls(
                 style = CameraTypography.toolbarText,
                 color =
                     if (sliderMode == CameraViewModel.SliderMode.SHUTTER) {
-                        CameraColors.onSurface
+                        activeColor
                     } else {
-                        CameraColors.onSurfaceVariant
+                        inactiveColor
                     },
             )
         }
@@ -432,8 +447,9 @@ private fun SettingsButtons(
         // Auto/Manual toggle
         ToolbarTextButton(
             text = if (uiState.exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
+            color = uiState.textColor,
             enabled = !uiState.isBusy,
-            onClick = {
+            onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleExposureMode()
             },
@@ -449,9 +465,10 @@ private fun SettingsButtons(
                 } else {
                     "RGB"
                 },
+            color = uiState.textColor,
             enabled = !uiState.isBusy && !uiState.isRawMode,
             alpha = if (uiState.isRawMode) 0.3f else 1f,
-            onClick = {
+            onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleColorMode()
             },
@@ -461,15 +478,20 @@ private fun SettingsButtons(
         if (!BuildConfig.MONOCHROME_MODE) {
             ToolbarTextButton(
                 text = viewModel.getFormatName(uiState.outputFormat, fastMode = uiState.isFastMode),
+                color = uiState.textColor,
                 enabled = !uiState.isBusy,
-                onClick = {
+                onTap = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     viewModel.toggleOutputFormat()
+                },
+                onLongPress = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.toggleRedTextMode()
                 },
             )
         }
 
-        // Flash toggle (disabled in HF mode - uses ZSL buffer)
+        // Flash toggle (long-press to toggle viewfinder)
         ToolbarIconButton(
             iconRes =
                 if (uiState.flashEnabled) {
@@ -478,6 +500,7 @@ private fun SettingsButtons(
                     R.drawable.flash_off_stroke_rounded
                 },
             contentDescription = "Toggle flash",
+            tint = uiState.textColor,
             onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleFlash()
@@ -486,7 +509,7 @@ private fun SettingsButtons(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleCameraHidden()
             },
-            enabled = !uiState.isFastMode,
+            tapEnabled = !uiState.isFastMode,
         )
 
         // Grid toggle
@@ -498,6 +521,7 @@ private fun SettingsButtons(
                     R.drawable.grid_off_stroke_rounded
                 },
             contentDescription = "Toggle grid",
+            tint = uiState.textColor,
             onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleGrid()
@@ -516,21 +540,30 @@ private fun SettingsButtons(
 @Composable
 private fun ToolbarTextButton(
     text: String,
+    color: androidx.compose.ui.graphics.Color = CameraColors.onSurface,
     enabled: Boolean = true,
     alpha: Float = 1f,
-    onClick: () -> Unit,
+    onTap: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
 ) {
     Box(
         modifier =
             Modifier
                 .rotateVertically(clockwise = true)
-                .clickable(enabled = enabled, onClick = onClick),
+                .pointerInput(enabled) {
+                    if (enabled) {
+                        detectTapGestures(
+                            onTap = { onTap() },
+                            onLongPress = { onLongPress?.invoke() },
+                        )
+                    }
+                },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
             style = CameraTypography.toolbarText,
-            color = CameraColors.onSurface.copy(alpha = alpha),
+            color = color.copy(alpha = alpha),
         )
     }
 }
@@ -542,29 +575,27 @@ private fun ToolbarTextButton(
 private fun ToolbarIconButton(
     iconRes: Int,
     contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
-    enabled: Boolean = true,
+    tapEnabled: Boolean = true,
 ) {
     Box(
         modifier =
             Modifier
                 .rotateVertically(clockwise = true)
-                .alpha(if (enabled) 1f else 0.3f)
-                .pointerInput(enabled) {
-                    if (enabled) {
-                        detectTapGestures(
-                            onTap = { onTap() },
-                            onLongPress = { onLongPress() },
-                        )
-                    }
+                .pointerInput(tapEnabled) {
+                    detectTapGestures(
+                        onTap = { if (tapEnabled) onTap() },
+                        onLongPress = { onLongPress() },
+                    )
                 },
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(id = iconRes),
             contentDescription = contentDescription,
-            tint = androidx.compose.ui.graphics.Color.Unspecified,
+            tint = tint.copy(alpha = if (tapEnabled) 1f else 0.3f),
             modifier = Modifier.size(CameraDimens.toolbarIconSize),
         )
     }
@@ -806,7 +837,7 @@ private fun StatusPanel(
             uiState.toastMessage?.let { message ->
                 Text(
                     text = message,
-                    color = CameraColors.onSurface,
+                    color = uiState.textColor,
                     style = CameraTypography.toolbarText,
                     modifier = Modifier.rotateVertically(clockwise = true),
                 )
@@ -826,7 +857,7 @@ private fun StatusPanel(
                     uiState.isSaving -> "SAVING"
                     else -> "READY"
                 },
-            color = CameraColors.onSurface,
+            color = uiState.textColor,
             style = CameraTypography.toolbarText,
             modifier = Modifier.rotateVertically(clockwise = true),
         )

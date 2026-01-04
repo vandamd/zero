@@ -44,6 +44,8 @@ object CameraColors {
     val onSurfaceDisabled = Color.White.copy(alpha = 0.3f)
     val overlay = Color.White
     val gridLine = Color.White
+    val red = Color.Red
+    val redVariant = Color.Red.copy(alpha = 0.7f)
 }
 
 /**
