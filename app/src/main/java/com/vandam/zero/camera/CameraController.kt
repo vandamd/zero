@@ -43,9 +43,10 @@ class CameraController(
         private const val TAG = "CameraController"
         private const val FILENAME_FORMAT = "'ZERO_'yyyyMMdd_HHmmss"
 
-        // Hyperfocal distance: 0.13 diopters = ~7.7m
-        // Sharp focus from ~3.8m to infinity
-        private const val HYPERFOCAL_DIOPTERS = 0.13f
+        // Hyperfocal distance: 0.45 diopters = ~2.2m
+        // Based on traditional CoC (sensor diagonal / 1500)
+        // Sharp focus from ~1.1m to infinity
+        private const val HYPERFOCAL_DIOPTERS = 0.45f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
 
         // Format constants (matching CameraX for compatibility)
@@ -360,20 +361,22 @@ class CameraController(
         targetWidth: Int,
         targetHeight: Int,
     ): Size {
-        if (choices == null || choices.isEmpty()) return Size(1920, 1080)
+        if (choices == null || choices.isEmpty()) return Size(1440, 1080)
 
         // Prefer 4:3 aspect ratio for preview to match sensor
+        // Target 1440x1080 to match screen resolution (1080x1240) without wasting pixels
         val targetRatio = 4.0 / 3.0
         val tolerance = 0.1
+        val idealWidth = 1440
 
         val suitable =
             choices
                 .filter { size ->
                     val ratio = size.width.toDouble() / size.height.toDouble()
-                    Math.abs(ratio - targetRatio) < tolerance && size.width <= 1920
+                    Math.abs(ratio - targetRatio) < tolerance && size.width <= idealWidth
                 }.sortedByDescending { it.width * it.height }
 
-        return suitable.firstOrNull() ?: choices.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
+        return suitable.firstOrNull() ?: choices.maxByOrNull { it.width * it.height } ?: Size(1440, 1080)
     }
 
     private val stateCallback =
@@ -532,7 +535,7 @@ class CameraController(
             builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
         }
 
-        // Color processing
+        // Color processing - use FAST for minimal latency
         builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
 
@@ -667,7 +670,7 @@ class CameraController(
                         set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
                     }
 
-                    // Color processing
+                    // Color processing - use FAST for minimal latency
                     set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                     set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 }
@@ -793,9 +796,17 @@ class CameraController(
                 onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
-            // Save to storage
+            // Apply grayscale if BW mode, otherwise save directly
+            val finalBytes =
+                if (bwMode || monoFlavor) {
+                    convertToGrayscaleJpeg(bytes)
+                } else {
+                    bytes
+                }
+
+            // Save to storage (ZSL path needs EXIF written manually)
             val saveStart = System.currentTimeMillis()
-            val uri = saveJpegToStorage(bytes)
+            val uri = saveJpegToStorage(finalBytes, writeExifOrientation = true)
             val saveTime = System.currentTimeMillis() - saveStart
 
             // Calculate benchmark
@@ -834,7 +845,7 @@ class CameraController(
             val outputStream = ByteArrayOutputStream()
             yuvImage.compressToJpeg(
                 android.graphics.Rect(0, 0, image.width, image.height),
-                95,
+                100,
                 outputStream,
             )
             outputStream.toByteArray()
@@ -904,12 +915,12 @@ class CameraController(
                 onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
-            // Apply grayscale if BW mode, otherwise re-encode to fix color
+            // Apply grayscale if BW mode, otherwise save original bytes directly
             val finalBytes =
                 if (bwMode || monoFlavor) {
                     convertToGrayscaleJpeg(bytes)
                 } else {
-                    reencodeJpeg(bytes)
+                    bytes
                 }
 
             // Save to storage
@@ -1018,7 +1029,7 @@ class CameraController(
             val grayscale = GrayscaleConverter.toGrayscale(original, recycleSource = true)
 
             val outputStream = ByteArrayOutputStream()
-            val success = grayscale.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+            val success = grayscale.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
             grayscale.recycle()
 
             if (success && outputStream.size() > 0) {
@@ -1032,36 +1043,10 @@ class CameraController(
         }
     }
 
-    /**
-     * Re-encode JPEG through Android's Bitmap codec to fix color issues
-     * from camera's native JPEG encoder.
-     */
-    private fun reencodeJpeg(jpegBytes: ByteArray): ByteArray {
-        return try {
-            val decodeOptions =
-                BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-            val bitmap =
-                BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
-                    ?: return jpegBytes
-
-            val outputStream = ByteArrayOutputStream()
-            val success = bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-            bitmap.recycle()
-
-            if (success && outputStream.size() > 0) {
-                outputStream.toByteArray()
-            } else {
-                jpegBytes
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "JPEG re-encode failed", e)
-            jpegBytes
-        }
-    }
-
-    private fun saveJpegToStorage(jpegBytes: ByteArray): Uri? {
+    private fun saveJpegToStorage(
+        jpegBytes: ByteArray,
+        writeExifOrientation: Boolean = false,
+    ): Uri? {
         val name =
             SimpleDateFormat(FILENAME_FORMAT, Locale.US)
                 .format(System.currentTimeMillis()) + ".jpg"
@@ -1084,6 +1069,22 @@ class CameraController(
         if (uri != null) {
             context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                 outputStream.write(jpegBytes)
+            }
+
+            // Write EXIF orientation for images that don't have it embedded (ZSL path)
+            if (writeExifOrientation) {
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                        val exif = android.media.ExifInterface(pfd.fileDescriptor)
+                        exif.setAttribute(
+                            android.media.ExifInterface.TAG_ORIENTATION,
+                            getExifOrientation().toString(),
+                        )
+                        exif.saveAttributes()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to write EXIF orientation", e)
+                }
             }
         }
 

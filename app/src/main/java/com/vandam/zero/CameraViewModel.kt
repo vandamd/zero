@@ -206,6 +206,9 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleFlash() {
+        // Flash not available in HF mode (uses ZSL buffer)
+        if (_isFastMode.value) return
+
         _flashEnabled.value = !_flashEnabled.value
         cameraController?.setFlashEnabled(_flashEnabled.value)
         saveSettings()
@@ -454,9 +457,12 @@ class CameraViewModel : ViewModel() {
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
                 // Apply color mode for non-RAW
                 _bwMode.value = _colorMode.value
+                // Flash not compatible with ZSL capture
+                _flashEnabled.value = false
 
                 cameraController?.setFastMode(true)
                 cameraController?.setBwMode(_bwMode.value)
+                cameraController?.setFlashEnabled(false)
                 cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_JPEG)
             }
 

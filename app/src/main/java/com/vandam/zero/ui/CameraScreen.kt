@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -468,7 +469,7 @@ private fun SettingsButtons(
             )
         }
 
-        // Flash toggle
+        // Flash toggle (disabled in HF mode - uses ZSL buffer)
         ToolbarIconButton(
             iconRes =
                 if (uiState.flashEnabled) {
@@ -485,6 +486,7 @@ private fun SettingsButtons(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleCameraHidden()
             },
+            enabled = !uiState.isFastMode,
         )
 
         // Grid toggle
@@ -542,16 +544,20 @@ private fun ToolbarIconButton(
     contentDescription: String,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier =
             Modifier
                 .rotateVertically(clockwise = true)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onTap() },
-                        onLongPress = { onLongPress() },
-                    )
+                .alpha(if (enabled) 1f else 0.3f)
+                .pointerInput(enabled) {
+                    if (enabled) {
+                        detectTapGestures(
+                            onTap = { onTap() },
+                            onLongPress = { onLongPress() },
+                        )
+                    }
                 },
         contentAlignment = Alignment.Center,
     ) {
