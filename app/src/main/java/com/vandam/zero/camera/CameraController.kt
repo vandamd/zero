@@ -622,9 +622,12 @@ class CameraController(
                     addTarget(targetSurface)
                     applyCommonSettings(this)
 
-                    // Flash
+                    // Flash - only use auto-flash mode if auto exposure is enabled
+                    // Otherwise just fire the flash without overriding manual exposure
                     if (flashEnabled) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                        if (autoExposure) {
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                        }
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
                 }
@@ -654,9 +657,23 @@ class CameraController(
                     // JPEG orientation
                     set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
 
-                    // Flash if enabled
-                    if (flashEnabled) {
-                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                    // Exposure settings - must match preview for consistent output
+                    if (autoExposure) {
+                        // Use flash-aware AE mode if flash is enabled
+                        if (flashEnabled) {
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                        } else {
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        }
+                        set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
+                    } else {
+                        // Manual exposure - just fire flash without AE override
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        set(CaptureRequest.SENSOR_SENSITIVITY, manualIso)
+                        set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
+                        if (flashEnabled) {
+                            set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                        }
                     }
 
                     // Minimal processing - disable ISP enhancements for film-like output
@@ -675,7 +692,7 @@ class CameraController(
                     set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 }
 
-            Log.d(TAG, "Taking JPEG photo")
+            Log.d(TAG, "Taking JPEG photo (autoExposure=$autoExposure, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)")
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error taking vanilla JPEG photo", e)
