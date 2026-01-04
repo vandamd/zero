@@ -132,19 +132,16 @@ private fun CameraContent(viewModel: CameraViewModel) {
     val density = LocalDensity.current
     val fixedDensity = Density(density.density, fontScale = 0.85f)
 
-    // Collect all state from ViewModel
     val uiState = rememberCameraUiState(viewModel)
 
     CompositionLocalProvider(LocalDensity provides fixedDensity) {
         Row(modifier = Modifier.fillMaxSize()) {
-            // Left toolbar
             LeftToolbar(
                 uiState = uiState,
                 viewModel = viewModel,
                 haptic = haptic,
             )
 
-            // Camera preview area
             CameraPreviewArea(
                 uiState = uiState,
                 viewModel = viewModel,
@@ -260,7 +257,6 @@ private fun LeftToolbar(
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Exposure controls (Auto or Manual)
         when (uiState.exposureMode) {
             CameraViewModel.ExposureMode.AUTO -> {
                 AutoExposureControls(
@@ -292,7 +288,6 @@ private fun LeftToolbar(
             }
         }
 
-        // Settings buttons
         SettingsButtons(
             uiState = uiState,
             viewModel = viewModel,
@@ -367,7 +362,6 @@ private fun ManualExposureControls(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
     ) {
-        // ISO control
         Box(
             modifier =
                 Modifier
@@ -399,7 +393,6 @@ private fun ManualExposureControls(
             )
         }
 
-        // Shutter speed control
         Box(
             modifier =
                 Modifier
@@ -445,7 +438,6 @@ private fun SettingsButtons(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
     ) {
-        // Auto/Manual toggle
         ToolbarTextButton(
             text = if (uiState.exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
             color = uiState.textColor,
@@ -456,7 +448,6 @@ private fun SettingsButtons(
             },
         )
 
-        // Color mode toggle (BW/RGB)
         ToolbarTextButton(
             text =
                 if (uiState.isRawMode) {
@@ -475,7 +466,6 @@ private fun SettingsButtons(
             },
         )
 
-        // Output format toggle
         if (!BuildConfig.MONOCHROME_MODE) {
             ToolbarTextButton(
                 text = viewModel.getFormatName(uiState.outputFormat, fastMode = uiState.isFastMode),
@@ -493,7 +483,6 @@ private fun SettingsButtons(
             )
         }
 
-        // Flash toggle (long-press to toggle viewfinder)
         ToolbarIconButton(
             iconRes =
                 if (uiState.flashEnabled) {
@@ -514,7 +503,6 @@ private fun SettingsButtons(
             tapEnabled = !uiState.isFastMode,
         )
 
-        // Grid toggle
         ToolbarIconButton(
             iconRes =
                 if (uiState.gridEnabled) {
@@ -621,13 +609,11 @@ private fun CameraPreviewArea(
                     viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
                 },
     ) {
-        // Camera TextureView
         CameraTextureView(
             uiState = uiState,
             viewModel = viewModel,
         )
 
-        // Overlays (crosshair, grid)
         if (!uiState.showFlash && !uiState.cameraHidden) {
             CrosshairOverlay(crosshairPosition = uiState.crosshairPosition)
 
@@ -636,7 +622,6 @@ private fun CameraPreviewArea(
             }
         }
 
-        // Slider controls
         SliderPanel(
             sliderMode = uiState.sliderMode,
             exposureValue = uiState.exposureValue,
@@ -645,7 +630,6 @@ private fun CameraPreviewArea(
             viewModel = viewModel,
         )
 
-        // Right status panel
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.CenterEnd,
@@ -656,14 +640,12 @@ private fun CameraPreviewArea(
             )
         }
 
-        // Shutter flash effect
         ShutterFlashEffect(
             showFlash = uiState.showFlash,
             haptic = haptic,
             onFlashComplete = { viewModel.resetShutterFlash() },
         )
 
-        // Captured image preview
         if (uiState.previewEnabled) {
             CapturedImagePreview(
                 bitmap = uiState.capturedImageBitmap,
@@ -672,7 +654,6 @@ private fun CameraPreviewArea(
             )
         }
 
-        // Auto-hide crosshair
         CrosshairAutoHide(
             crosshairPosition = uiState.crosshairPosition,
             isFocusButtonHeld = uiState.isFocusButtonHeld,
@@ -834,7 +815,6 @@ private fun StatusPanel(
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Toast message
         Box {
             uiState.toastMessage?.let { message ->
                 Text(
@@ -851,7 +831,6 @@ private fun StatusPanel(
             }
         }
 
-        // Capture status
         Text(
             text =
                 when {

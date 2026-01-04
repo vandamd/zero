@@ -67,7 +67,6 @@ class CameraViewModel : ViewModel() {
     private val _bwMode = MutableStateFlow(false)
     val bwMode: StateFlow<Boolean> = _bwMode
 
-    // Color mode: false = RGB, true = BW (separate from format selection)
     private val _colorMode = MutableStateFlow(false)
     val colorMode: StateFlow<Boolean> = _colorMode
 
@@ -98,7 +97,6 @@ class CameraViewModel : ViewModel() {
     private val _capturedImageIsPortrait = MutableStateFlow(false)
     val capturedImageIsPortrait: StateFlow<Boolean> = _capturedImageIsPortrait
 
-    // Benchmark data: (shutterLatencyMs, saveLatencyMs)
     private val _lastBenchmark = MutableStateFlow<Pair<Long, Long>?>(null)
     val lastBenchmark: StateFlow<Pair<Long, Long>?> = _lastBenchmark
 
@@ -110,7 +108,6 @@ class CameraViewModel : ViewModel() {
     private var priorPreview: Boolean = true
     private var priorFormat: Int = 0
 
-    // Orientation listener
     private var orientationEventListener: OrientationEventListener? = null
     private var currentRotation: Int = Surface.ROTATION_0
 
@@ -209,7 +206,6 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleFlash() {
-        // Flash not available in HF mode (uses ZSL buffer)
         if (_isFastMode.value) return
 
         _flashEnabled.value = !_flashEnabled.value
@@ -225,7 +221,6 @@ class CameraViewModel : ViewModel() {
     fun toggleRedTextMode(): Boolean {
         val context = appContext ?: return false
 
-        // Red mode only available when device display is NOT in grayscale mode
         val isGrayscale = isDisplayGrayscale(context)
         if (isGrayscale) return false
 
@@ -235,25 +230,21 @@ class CameraViewModel : ViewModel() {
         return true
     }
 
-    private fun isDisplayGrayscale(context: Context): Boolean =
-        try {
-            val daltonizerEnabled =
-                android.provider.Settings.Secure.getInt(
-                    context.contentResolver,
-                    "accessibility_display_daltonizer_enabled",
-                    0,
-                )
-            val daltonizerMode =
-                android.provider.Settings.Secure.getInt(
-                    context.contentResolver,
-                    "accessibility_display_daltonizer",
-                    -1,
-                )
-            // Daltonizer mode 0 = grayscale
-            daltonizerEnabled == 1 && daltonizerMode == 0
-        } catch (e: Exception) {
-            false
-        }
+    private fun isDisplayGrayscale(context: Context): Boolean {
+        val daltonizerEnabled =
+            android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                "accessibility_display_daltonizer_enabled",
+                0,
+            )
+        val daltonizerMode =
+            android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                "accessibility_display_daltonizer",
+                -1,
+            )
+        return daltonizerEnabled == 1 && daltonizerMode == 0
+    }
 
     fun toggleExposurePanel() {
         _sliderMode.value =
@@ -402,7 +393,7 @@ class CameraViewModel : ViewModel() {
         if (_isFastMode.value) {
             _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
         }
-        // Apply color mode (BW) for non-RAW formats
+
         if (_outputFormat.value != CameraController.OUTPUT_FORMAT_RAW) {
             _bwMode.value = _colorMode.value
         } else {
@@ -417,7 +408,6 @@ class CameraViewModel : ViewModel() {
         cameraController?.bindCamera(
             textureView,
             onFormatsAvailable = { formats ->
-                // Order: JPG, HF, RAW (color mode is separate)
                 val orderedFormats =
                     if (formats.contains(CameraController.OUTPUT_FORMAT_JPEG)) {
                         val hasRaw = formats.contains(CameraController.OUTPUT_FORMAT_RAW)
@@ -471,7 +461,6 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleOutputFormat() {
-        // Don't allow mode changes while capturing or saving
         if (_isCapturing.value || _isSaving.value) return
 
         val formats = _availableFormats.value
@@ -493,9 +482,7 @@ class CameraViewModel : ViewModel() {
 
                 _isFastMode.value = true
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
-                // Apply color mode for non-RAW
                 _bwMode.value = _colorMode.value
-                // Flash not compatible with ZSL capture
                 _flashEnabled.value = false
 
                 cameraController?.setFastMode(true)
@@ -510,7 +497,7 @@ class CameraViewModel : ViewModel() {
                     _previewEnabled.value = priorPreview
                     cameraController?.setFastMode(false)
                 }
-                // RAW mode: always RGB, but don't change colorMode preference
+
                 _bwMode.value = false
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_RAW
                 cameraController?.setBwMode(false)
@@ -523,7 +510,7 @@ class CameraViewModel : ViewModel() {
                     _previewEnabled.value = priorPreview
                     cameraController?.setFastMode(false)
                 }
-                // Apply saved color mode preference for JPG
+
                 _bwMode.value = _colorMode.value
                 _outputFormat.value = newOption
                 cameraController?.setBwMode(_bwMode.value)
@@ -540,9 +527,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleColorMode() {
-        // Don't allow mode changes while capturing or saving
         if (_isCapturing.value || _isSaving.value) return
-        // Don't allow toggle when in RAW mode (it's always RGB)
         if (_outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) return
 
         _colorMode.value = !_colorMode.value
@@ -576,7 +561,6 @@ class CameraViewModel : ViewModel() {
         lastFocusTimestamp = System.currentTimeMillis()
         _isCapturing.value = true
 
-        // In fast mode, call directly without viewModelScope.launch to reduce latency
         if (_isFastMode.value) {
             controller.takePhoto(
                 onCaptureStarted = {
@@ -680,7 +664,6 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleFastMode() {
-        // Don't allow mode changes while capturing or saving
         if (_isCapturing.value || _isSaving.value) return
 
         val enable = !_isFastMode.value

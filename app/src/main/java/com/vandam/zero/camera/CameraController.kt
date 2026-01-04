@@ -32,10 +32,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
-/**
- * Pure Camera2 implementation for minimal processing capture.
- * Supports JPEG, RAW/DNG, BW mode, and hyperfocal (HF) mode.
- */
 class CameraController(
     private val context: Context,
 ) {
@@ -43,58 +39,46 @@ class CameraController(
         private const val TAG = "CameraController"
         private const val FILENAME_FORMAT = "'ZERO_'yyyyMMdd_HHmmss"
 
-        // Hyperfocal distance: 0.45 diopters = ~2.2m
-        // Based on traditional CoC (sensor diagonal / 1500)
-        // Sharp focus from ~1.1m to infinity
         private const val HYPERFOCAL_DIOPTERS = 0.45f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
 
-        // Format constants (matching CameraX for compatibility)
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
     }
 
-    // Camera state
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var cameraId: String? = null
     private var cameraCharacteristics: CameraCharacteristics? = null
 
-    // Image readers
     private var jpegImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
-    private var zslImageReader: ImageReader? = null // YUV for fast ZSL capture
+    private var zslImageReader: ImageReader? = null
 
-    // ZSL (Zero Shutter Lag) for fast mode - stores latest YUV image
     private var zslEnabled: Boolean = false
 
     @Volatile private var latestZslImage: Image? = null
     private val zslLock = Object()
 
-    // Threading
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private val cameraOpenCloseLock = Semaphore(1)
 
-    // Preview
     private var textureView: TextureView? = null
     private var previewSurface: Surface? = null
     private var previewSize: Size? = null
 
-    // Capture settings
-    private var currentOutputFormat: Int = OUTPUT_FORMAT_JPEG // 0 = JPEG, 2 = RAW
+    private var currentOutputFormat: Int = OUTPUT_FORMAT_JPEG
     private var flashEnabled: Boolean = false
     private var bwMode: Boolean = false
     private var fastMode: Boolean = false
     private var monoFlavor: Boolean = BuildConfig.MONOCHROME_MODE
 
-    // Exposure settings
     private var autoExposure: Boolean = true
     private var exposureCompensation: Int = 0
     private var manualIso: Int = 400
     private var manualExposureTimeNs: Long = 16_666_666L
 
-    // Device capabilities
     private var isoRange: android.util.Range<Int>? = null
     private var exposureTimeRange: android.util.Range<Long>? = null
     private var exposureCompensationRange: android.util.Range<Int>? = null
@@ -104,30 +88,21 @@ class CameraController(
     private var sensorOrientation: Int = 0
     private var supportsRaw: Boolean = false
 
-    // Orientation
     private var currentRotation: Int = Surface.ROTATION_0
 
-    // Benchmark timing
     private var captureStartTimestamp: Long = 0
     private var shutterTimestamp: Long = 0
 
-    // Pending captures
     private var pendingCaptureCount = 0
     private val captureLock = Object()
 
-    // Coroutine scope
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // Callbacks
     private var onCameraReadyCallback: (() -> Unit)? = null
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
 
-    // Preview request builder (kept for updating settings)
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
-    /**
-     * Creates a TextureView for camera preview.
-     */
     fun createPreviewView(context: Context): TextureView =
         TextureView(context).also { tv ->
             textureView = tv
@@ -159,21 +134,14 @@ class CameraController(
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                // Called every frame - no logging needed
             }
         }
 
-    /**
-     * Sets initial output format before camera binding.
-     */
     fun setInitialOutputFormat(format: Int) {
         currentOutputFormat = format
         Log.d(TAG, "Initial output format set to: ${getFormatName(format)}")
     }
 
-    /**
-     * Binds the camera with lifecycle management.
-     */
     fun bindCamera(
         textureView: TextureView,
         onFormatsAvailable: (List<Int>) -> Unit = {},
@@ -214,7 +182,6 @@ class CameraController(
 
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
-        // Find back camera
         cameraId =
             cameraManager.cameraIdList.firstOrNull { id ->
                 val chars = cameraManager.getCameraCharacteristics(id)
@@ -229,7 +196,6 @@ class CameraController(
         cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId!!)
         val chars = cameraCharacteristics!!
 
-        // Get device capabilities
         sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
         exposureTimeRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
@@ -245,14 +211,12 @@ class CameraController(
         Log.d(TAG, "Camera capabilities - ISO: $isoRange, Exposure: $exposureTimeRange")
         Log.d(TAG, "AF regions: $maxAfRegions, AE regions: $maxAeRegions, Sensor orientation: $sensorOrientation")
 
-        // Check RAW support
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
         supportsRaw = rawSizes != null && rawSizes.isNotEmpty() && !BuildConfig.MONOCHROME_MODE
 
         Log.d(TAG, "RAW supported: $supportsRaw")
 
-        // Report available formats
         val formats = mutableListOf<Int>()
         formats.add(OUTPUT_FORMAT_JPEG)
         if (supportsRaw) {
@@ -260,10 +224,8 @@ class CameraController(
         }
         onFormatsAvailableCallback?.invoke(formats)
 
-        // Setup image readers
         setupImageReaders(chars, map)
 
-        // Open camera
         if (!cameraOpenCloseLock.tryAcquire(CAMERA_OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
             throw RuntimeException("Timeout waiting to open camera")
         }
@@ -280,7 +242,6 @@ class CameraController(
         chars: CameraCharacteristics,
         map: android.hardware.camera2.params.StreamConfigurationMap?,
     ) {
-        // JPEG reader - get largest size
         val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)
         val jpegSize = jpegSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
         Log.d(TAG, "JPEG capture size: ${jpegSize.width}x${jpegSize.height}")
@@ -301,7 +262,6 @@ class CameraController(
                     }, backgroundHandler)
                 }
 
-        // RAW reader if supported
         if (supportsRaw) {
             val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
             val rawSize = rawSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
@@ -324,7 +284,6 @@ class CameraController(
                     }
         }
 
-        // ZSL reader - YUV_420_888 is much faster than JPEG for continuous capture
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
         val zslSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: jpegSize
         Log.d(TAG, "ZSL (YUV) capture size: ${zslSize.width}x${zslSize.height}")
@@ -344,13 +303,11 @@ class CameraController(
                                 latestZslImage = reader.acquireLatestImage()
                             }
                         } else {
-                            // Discard if not in ZSL mode
                             reader.acquireLatestImage()?.close()
                         }
                     }, backgroundHandler)
                 }
 
-        // Preview size - find appropriate size for TextureView
         val displaySizes = map?.getOutputSizes(SurfaceTexture::class.java)
         previewSize = chooseOptimalPreviewSize(displaySizes, textureView?.width ?: 1080, textureView?.height ?: 1920)
         Log.d(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
@@ -363,8 +320,6 @@ class CameraController(
     ): Size {
         if (choices == null || choices.isEmpty()) return Size(1440, 1080)
 
-        // Prefer 4:3 aspect ratio for preview to match sensor
-        // Target 1440x1080 to match screen resolution (1080x1240) without wasting pixels
         val targetRatio = 4.0 / 3.0
         val tolerance = 0.1
         val idealWidth = 1440
@@ -417,7 +372,6 @@ class CameraController(
         jpegImageReader?.surface?.let { surfaces.add(it) }
         rawImageReader?.surface?.let { surfaces.add(it) }
 
-        // Only add ZSL surface in fast mode - it breaks JPEG colors on quad bayer sensors
         if (fastMode) {
             zslImageReader?.surface?.let { surfaces.add(it) }
             Log.d(TAG, "Session config: Preview + JPEG + RAW + ZSL(YUV) [fast mode]")
@@ -433,7 +387,6 @@ class CameraController(
                         captureSession = session
                         startPreview()
 
-                        // Apply grayscale filter to preview if needed
                         applyGrayscaleFilterToPreview()
 
                         coroutineScope.launch(Dispatchers.Main) {
@@ -447,7 +400,6 @@ class CameraController(
                     }
                 }
 
-            // Use modern API for Android P+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val outputConfigs = surfaces.map { OutputConfiguration(it) }
                 val sessionConfig =
@@ -474,7 +426,6 @@ class CameraController(
 
         try {
             if (fastMode && zslImageReader != null) {
-                // Fast mode: continuous YUV capture for instant shutter
                 previewRequestBuilder =
                     camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG).apply {
                         addTarget(surface)
@@ -484,7 +435,6 @@ class CameraController(
                 zslEnabled = true
                 Log.d(TAG, "Preview started with ZSL [fast mode]")
             } else {
-                // Normal mode: simple preview
                 previewRequestBuilder =
                     camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                         addTarget(surface)
@@ -504,17 +454,13 @@ class CameraController(
      * Applies common capture settings based on current mode.
      */
     private fun applyCommonSettings(builder: CaptureRequest.Builder) {
-        // Focus mode
         if (fastMode) {
-            // Hyperfocal - lock focus at fixed distance
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, HYPERFOCAL_DIOPTERS)
         } else {
-            // Continuous autofocus
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
 
-        // Exposure mode
         if (autoExposure) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
@@ -524,22 +470,18 @@ class CameraController(
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
         }
 
-        // Minimal processing - disable ISP enhancements for film-like output
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
         builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
-        // SHADING_MODE_OFF causes split preview on some sensors - keep it on for preview
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
         builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
         }
 
-        // Color processing - use FAST for minimal latency
         builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
 
-        // Disable face detection
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
     }
 
@@ -594,7 +536,6 @@ class CameraController(
             Log.d(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
         }
 
-        // Store callbacks
         onCaptureStartedCallback = onCaptureStarted
         onPreviewReadyCallback = onPreviewReady
         onCompleteCallback = onComplete
@@ -602,8 +543,6 @@ class CameraController(
 
         captureStartTimestamp = System.currentTimeMillis()
 
-        // Fast mode uses ZSL/YUV path for instant capture
-        // Normal mode uses vanilla JPEG (correct colors without ZSL surface in session)
         if (currentOutputFormat == OUTPUT_FORMAT_JPEG) {
             if (fastMode && zslEnabled) {
                 takeZslPhoto()
@@ -613,7 +552,6 @@ class CameraController(
             return
         }
 
-        // RAW capture path
         val targetSurface = rawImageReader!!.surface
 
         try {
@@ -622,8 +560,6 @@ class CameraController(
                     addTarget(targetSurface)
                     applyCommonSettings(this)
 
-                    // Flash - only use auto-flash mode if auto exposure is enabled
-                    // Otherwise just fire the flash without overriding manual exposure
                     if (flashEnabled) {
                         if (autoExposure) {
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
@@ -654,12 +590,9 @@ class CameraController(
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(jpegSurface)
 
-                    // JPEG orientation
                     set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
 
-                    // Exposure settings - must match preview for consistent output
                     if (autoExposure) {
-                        // Use flash-aware AE mode if flash is enabled
                         if (flashEnabled) {
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
                         } else {
@@ -667,7 +600,6 @@ class CameraController(
                         }
                         set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
                     } else {
-                        // Manual exposure - just fire flash without AE override
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                         set(CaptureRequest.SENSOR_SENSITIVITY, manualIso)
                         set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
@@ -676,7 +608,6 @@ class CameraController(
                         }
                     }
 
-                    // Minimal processing - disable ISP enhancements for film-like output
                     set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                     set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                     set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
@@ -687,7 +618,6 @@ class CameraController(
                         set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
                     }
 
-                    // Color processing - use FAST for minimal latency
                     set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                     set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 }
@@ -721,7 +651,6 @@ class CameraController(
                 result: TotalCaptureResult,
             ) {
                 Log.d(TAG, "onCaptureCompleted")
-                // Store for DNG metadata
                 lastCaptureResult = result
             }
 
@@ -751,12 +680,11 @@ class CameraController(
 
         synchronized(zslLock) {
             image = latestZslImage
-            latestZslImage = null // Take ownership
+            latestZslImage = null
         }
 
         if (image == null) {
             Log.w(TAG, "ZSL: No image available in buffer, waiting...")
-            // Wait a bit for buffer to fill, then retry
             coroutineScope.launch(Dispatchers.IO) {
                 delay(100)
                 val retryImage =
@@ -785,13 +713,11 @@ class CameraController(
         shutterTimestamp = System.currentTimeMillis()
         val bufferGrabLatency = shutterTimestamp - captureStartTimestamp
 
-        // Immediately signal capture started
         coroutineScope.launch(Dispatchers.Main) {
             onCaptureStartedCallback?.invoke()
         }
 
         coroutineScope.launch(Dispatchers.IO) {
-            // Convert YUV to JPEG
             val conversionStart = System.currentTimeMillis()
             val bytes = yuvToJpeg(image)
             val conversionTime = System.currentTimeMillis() - conversionStart
@@ -806,14 +732,12 @@ class CameraController(
                 return@launch
             }
 
-            // Extract preview bitmap
             val previewBitmap = extractPreviewBitmap(bytes)
 
             withContext(Dispatchers.Main) {
                 onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
-            // Apply grayscale if BW mode, otherwise save directly
             val finalBytes =
                 if (bwMode || monoFlavor) {
                     convertToGrayscaleJpeg(bytes)
@@ -821,12 +745,10 @@ class CameraController(
                     bytes
                 }
 
-            // Save to storage (ZSL path needs EXIF written manually)
             val saveStart = System.currentTimeMillis()
             val uri = saveJpegToStorage(finalBytes, writeExifOrientation = true)
             val saveTime = System.currentTimeMillis() - saveStart
 
-            // Calculate benchmark
             val totalLatency = System.currentTimeMillis() - captureStartTimestamp
             Log.d(
                 TAG,
@@ -889,7 +811,6 @@ class CameraController(
         val uvRowStride = image.planes[1].rowStride
         val uvPixelStride = image.planes[1].pixelStride
 
-        // Copy Y plane
         var pos = 0
         if (yRowStride == width) {
             yBuffer.get(nv21, 0, ySize)
@@ -902,11 +823,9 @@ class CameraController(
             }
         }
 
-        // Copy UV planes (interleaved as VU for NV21)
         val uvHeight = height / 2
         val uvWidth = width / 2
 
-        // Manual interleaving - V then U for each pixel pair
         for (row in 0 until uvHeight) {
             for (col in 0 until uvWidth) {
                 val uvIndex = row * uvRowStride + col * uvPixelStride
@@ -925,14 +844,12 @@ class CameraController(
         image.close()
 
         coroutineScope.launch(Dispatchers.IO) {
-            // Extract preview bitmap
             val previewBitmap = extractPreviewBitmap(bytes)
 
             withContext(Dispatchers.Main) {
                 onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
-            // Apply grayscale if BW mode, otherwise save original bytes directly
             val finalBytes =
                 if (bwMode || monoFlavor) {
                     convertToGrayscaleJpeg(bytes)
@@ -940,10 +857,8 @@ class CameraController(
                     bytes
                 }
 
-            // Save to storage
             val uri = saveJpegToStorage(finalBytes)
 
-            // Calculate benchmark
             val saveCompleteTime = System.currentTimeMillis()
             val shutterLatency = shutterTimestamp - captureStartTimestamp
             val saveLatency = saveCompleteTime - shutterTimestamp
@@ -964,12 +879,10 @@ class CameraController(
 
     private fun handleRawCapture(image: Image) {
         coroutineScope.launch(Dispatchers.IO) {
-            // RAW doesn't have embedded preview - signal null
             withContext(Dispatchers.Main) {
                 onPreviewReadyCallback?.invoke(null)
             }
 
-            // Wait for capture result to be available (needed for DNG metadata)
             var attempts = 0
             while (lastCaptureResult == null && attempts < 50) {
                 delay(10)
@@ -986,11 +899,9 @@ class CameraController(
                 return@launch
             }
 
-            // Save DNG
             val uri = saveDngToStorage(image)
             image.close()
 
-            // Calculate benchmark
             val saveCompleteTime = System.currentTimeMillis()
             val shutterLatency = shutterTimestamp - captureStartTimestamp
             val saveLatency = saveCompleteTime - shutterTimestamp
@@ -1025,7 +936,6 @@ class CameraController(
 
         val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions) ?: return null
 
-        // Apply grayscale if needed
         return if (bwMode || monoFlavor) {
             GrayscaleConverter.toGrayscale(bitmap, recycleSource = true)
         } else {
@@ -1039,9 +949,7 @@ class CameraController(
                 BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
-            val original =
-                BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
-                    ?: return jpegBytes
+            val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions) ?: return jpegBytes
 
             val grayscale = GrayscaleConverter.toGrayscale(original, recycleSource = true)
 
@@ -1088,7 +996,6 @@ class CameraController(
                 outputStream.write(jpegBytes)
             }
 
-            // Write EXIF orientation for images that don't have it embedded (ZSL path)
             if (writeExifOrientation) {
                 try {
                     context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
@@ -1151,7 +1058,6 @@ class CameraController(
                 Log.d(TAG, "DNG saved successfully: $uri")
             } catch (e: Exception) {
                 Log.e(TAG, "Error writing DNG", e)
-                // Delete the partially created file
                 try {
                     context.contentResolver.delete(uri, null, null)
                 } catch (de: Exception) {
@@ -1165,7 +1071,6 @@ class CameraController(
     }
 
     private fun getJpegOrientation(): Int {
-        // Convert device rotation to degrees
         val deviceDegrees =
             when (currentRotation) {
                 Surface.ROTATION_0 -> 0
@@ -1175,8 +1080,6 @@ class CameraController(
                 else -> 0
             }
 
-        // For back camera: rotation = (sensorOrientation - deviceDegrees + 360) % 360
-        // This compensates for how the sensor is mounted
         val jpegOrientation = (sensorOrientation - deviceDegrees + 360) % 360
         Log.d(TAG, "JPEG orientation: sensor=$sensorOrientation, device=$deviceDegrees, result=$jpegOrientation")
         return jpegOrientation
@@ -1192,10 +1095,6 @@ class CameraController(
             else -> android.media.ExifInterface.ORIENTATION_NORMAL
         }
     }
-
-    // ===================
-    // PUBLIC SETTINGS API
-    // ===================
 
     fun setRotation(rotation: Int) {
         currentRotation = rotation
@@ -1216,7 +1115,6 @@ class CameraController(
     fun setFastMode(enabled: Boolean) {
         if (fastMode == enabled) return
 
-        // Clear ZSL buffer when disabling
         if (!enabled) {
             synchronized(zslLock) {
                 latestZslImage?.close()
@@ -1228,7 +1126,6 @@ class CameraController(
         fastMode = enabled
         Log.d(TAG, "Fast (hyperfocal) mode set to: $enabled - recreating session")
 
-        // Close current session and recreate with/without ZSL surface
         captureSession?.close()
         captureSession = null
         createCaptureSession()
@@ -1319,16 +1216,13 @@ class CameraController(
             return
         }
 
-        // Convert tap coordinates to sensor coordinates
         val chars = cameraCharacteristics ?: return
         val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
 
-        // Calculate focus region (5% of sensor area around tap point)
         val focusSize = minOf(sensorRect.width(), sensorRect.height()) / 20
         val normalizedX = x / width
         val normalizedY = y / height
 
-        // Account for sensor orientation
         val sensorX: Int
         val sensorY: Int
         when (sensorOrientation) {
@@ -1374,7 +1268,6 @@ class CameraController(
 
             session.capture(builder.build(), null, backgroundHandler)
 
-            // Reset trigger
             builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
             session.setRepeatingRequest(builder.build(), null, backgroundHandler)
 
@@ -1469,10 +1362,6 @@ class CameraController(
         }
     }
 
-    // ===================
-    // LIFECYCLE
-    // ===================
-
     fun hasPendingCaptures(): Boolean {
         synchronized(captureLock) {
             return pendingCaptureCount > 0
@@ -1483,7 +1372,6 @@ class CameraController(
         try {
             cameraOpenCloseLock.acquire()
 
-            // Clean up ZSL
             synchronized(zslLock) {
                 latestZslImage?.close()
                 latestZslImage = null
