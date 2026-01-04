@@ -222,11 +222,38 @@ class CameraViewModel : ViewModel() {
         _toastMessage.value = if (_cameraHidden.value) "VIEWFINDER OFF" else "VIEWFINDER ON"
     }
 
-    fun toggleRedTextMode() {
+    fun toggleRedTextMode(): Boolean {
+        val context = appContext ?: return false
+
+        // Red mode only available when device display is NOT in grayscale mode
+        val isGrayscale = isDisplayGrayscale(context)
+        if (isGrayscale) return false
+
         _redTextMode.value = !_redTextMode.value
         _toastMessage.value = if (_redTextMode.value) "RED MODE ON" else "RED MODE OFF"
         saveSettings()
+        return true
     }
+
+    private fun isDisplayGrayscale(context: Context): Boolean =
+        try {
+            val daltonizerEnabled =
+                android.provider.Settings.Secure.getInt(
+                    context.contentResolver,
+                    "accessibility_display_daltonizer_enabled",
+                    0,
+                )
+            val daltonizerMode =
+                android.provider.Settings.Secure.getInt(
+                    context.contentResolver,
+                    "accessibility_display_daltonizer",
+                    -1,
+                )
+            // Daltonizer mode 0 = grayscale
+            daltonizerEnabled == 1 && daltonizerMode == 0
+        } catch (e: Exception) {
+            false
+        }
 
     fun toggleExposurePanel() {
         _sliderMode.value =

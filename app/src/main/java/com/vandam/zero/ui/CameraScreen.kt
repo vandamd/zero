@@ -485,8 +485,9 @@ private fun SettingsButtons(
                     viewModel.toggleOutputFormat()
                 },
                 onLongPress = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.toggleRedTextMode()
+                    if (viewModel.toggleRedTextMode()) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
                 },
             )
         }
