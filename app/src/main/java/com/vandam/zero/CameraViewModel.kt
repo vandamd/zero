@@ -6,10 +6,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.TextureView
+import android.view.WindowManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vandam.zero.camera.CameraController
@@ -434,6 +436,20 @@ class CameraViewModel : ViewModel() {
 
     private fun setupOrientationListener(context: Context) {
         orientationEventListener?.disable()
+
+        val initialRotation =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching { context.display?.rotation }.getOrNull()
+            } else {
+                @Suppress("DEPRECATION")
+                (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.rotation
+            }
+
+        initialRotation?.let { rotation ->
+            currentRotation = rotation
+            cameraController?.setRotation(rotation)
+            Log.d("CameraViewModel", "Rotation initialized to: $rotation")
+        }
 
         orientationEventListener =
             object : OrientationEventListener(context) {
