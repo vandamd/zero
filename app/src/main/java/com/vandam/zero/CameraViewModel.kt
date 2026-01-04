@@ -6,9 +6,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.util.Log
-import androidx.camera.view.PreviewView
-import androidx.lifecycle.LifecycleOwner
+import android.view.OrientationEventListener
+import android.view.Surface
+import android.view.TextureView
+import android.view.WindowManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vandam.zero.camera.CameraController
@@ -17,7 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class CameraViewModel : ViewModel() {
-    private val cameraController = CameraController()
+    private var cameraController: CameraController? = null
     private var prefs: SharedPreferences? = null
 
     private val _shutterFlash = MutableStateFlow(false)
@@ -60,14 +63,26 @@ class CameraViewModel : ViewModel() {
     private val _shutterSpeedNs = MutableStateFlow(16_666_666L)
     val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs
 
-    private val _outputFormat = MutableStateFlow(2)
+    private val _outputFormat = MutableStateFlow(CameraController.OUTPUT_FORMAT_JPEG)
     val outputFormat: StateFlow<Int> = _outputFormat
 
     private val _bwMode = MutableStateFlow(false)
     val bwMode: StateFlow<Boolean> = _bwMode
 
+    private val _colorMode = MutableStateFlow(false)
+    val colorMode: StateFlow<Boolean> = _colorMode
+
     private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
     val availableFormats: StateFlow<List<Int>> = _availableFormats
+
+    private val _isFastMode = MutableStateFlow(false)
+    val isFastMode: StateFlow<Boolean> = _isFastMode
+
+    private val _cameraHidden = MutableStateFlow(false)
+    val cameraHidden: StateFlow<Boolean> = _cameraHidden
+
+    private val _redTextMode = MutableStateFlow(false)
+    val redTextMode: StateFlow<Boolean> = _redTextMode
 
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
@@ -84,17 +99,31 @@ class CameraViewModel : ViewModel() {
     private val _capturedImageIsPortrait = MutableStateFlow(false)
     val capturedImageIsPortrait: StateFlow<Boolean> = _capturedImageIsPortrait
 
+    private val _lastBenchmark = MutableStateFlow<Pair<Long, Long>?>(null)
+    val lastBenchmark: StateFlow<Pair<Long, Long>?> = _lastBenchmark
+
     private var appContext: Context? = null
 
     private var screenWidth: Float = 0f
     private var screenHeight: Float = 0f
 
+    private var priorPreview: Boolean = true
+    private var priorFormat: Int = 0
+    private var priorFlash: Boolean = false
+
+    private var orientationEventListener: OrientationEventListener? = null
+    private var currentRotation: Int = Surface.ROTATION_0
+
     enum class ExposureMode {
-        AUTO, MANUAL
+        AUTO,
+        MANUAL,
     }
 
     enum class SliderMode {
-        NONE, EXPOSURE, ISO, SHUTTER
+        NONE,
+        EXPOSURE,
+        ISO,
+        SHUTTER,
     }
 
     fun resetShutterFlash() {
@@ -120,26 +149,31 @@ class CameraViewModel : ViewModel() {
                 return thumbnail
             }
         }
-        
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
+
+        val options =
+            BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             BitmapFactory.decodeStream(inputStream, null, options)
         }
-        
+
         val targetSize = 400
         val sampleSize = maxOf(1, minOf(options.outWidth, options.outHeight) / targetSize)
-        
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-        }
+
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+            }
         return context.contentResolver.openInputStream(uri)?.use { inputStream ->
             BitmapFactory.decodeStream(inputStream, null, decodeOptions)
         }
     }
 
-    fun showCrosshair(x: Float, y: Float) {
+    fun showCrosshair(
+        x: Float,
+        y: Float,
+    ) {
         _crosshairPosition.value = Pair(x, y)
     }
 
@@ -147,7 +181,10 @@ class CameraViewModel : ViewModel() {
         _crosshairPosition.value = null
     }
 
-    fun setScreenDimensions(width: Float, height: Float) {
+    fun setScreenDimensions(
+        width: Float,
+        height: Float,
+    ) {
         screenWidth = width
         screenHeight = height
     }
@@ -167,42 +204,85 @@ class CameraViewModel : ViewModel() {
         _toastMessage.value = null
     }
 
+    fun clearBenchmark() {
+        _lastBenchmark.value = null
+    }
+
     fun toggleFlash() {
+        if (_isFastMode.value) return
+
         _flashEnabled.value = !_flashEnabled.value
-        cameraController.setFlashEnabled(_flashEnabled.value)
+        cameraController?.setFlashEnabled(_flashEnabled.value)
         saveSettings()
     }
 
+    fun toggleCameraHidden() {
+        _cameraHidden.value = !_cameraHidden.value
+        _toastMessage.value = if (_cameraHidden.value) "VIEWFINDER OFF" else "VIEWFINDER ON"
+    }
+
+    fun toggleRedTextMode(): Boolean {
+        val context = appContext ?: return false
+
+        val isGrayscale = isDisplayGrayscale(context)
+        if (isGrayscale) return false
+
+        _redTextMode.value = !_redTextMode.value
+        _toastMessage.value = if (_redTextMode.value) "RED MODE ON" else "RED MODE OFF"
+        saveSettings()
+        return true
+    }
+
+    private fun isDisplayGrayscale(context: Context): Boolean {
+        val daltonizerEnabled =
+            android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                "accessibility_display_daltonizer_enabled",
+                0,
+            )
+        val daltonizerMode =
+            android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                "accessibility_display_daltonizer",
+                -1,
+            )
+        return daltonizerEnabled == 1 && daltonizerMode == 0
+    }
+
     fun toggleExposurePanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.EXPOSURE) {
-            SliderMode.NONE
-        } else {
-            SliderMode.EXPOSURE
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.EXPOSURE) {
+                SliderMode.NONE
+            } else {
+                SliderMode.EXPOSURE
+            }
     }
 
     fun toggleIsoPanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.ISO) {
-            SliderMode.NONE
-        } else {
-            SliderMode.ISO
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.ISO) {
+                SliderMode.NONE
+            } else {
+                SliderMode.ISO
+            }
     }
 
     fun toggleShutterPanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.SHUTTER) {
-            SliderMode.NONE
-        } else {
-            SliderMode.SHUTTER
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.SHUTTER) {
+                SliderMode.NONE
+            } else {
+                SliderMode.SHUTTER
+            }
     }
 
     fun toggleExposureMode() {
-        val newMode = if (_exposureMode.value == ExposureMode.AUTO) {
-            ExposureMode.MANUAL
-        } else {
-            ExposureMode.AUTO
-        }
+        val newMode =
+            if (_exposureMode.value == ExposureMode.AUTO) {
+                ExposureMode.MANUAL
+            } else {
+                ExposureMode.AUTO
+            }
         setExposureMode(newMode)
     }
 
@@ -211,28 +291,28 @@ class CameraViewModel : ViewModel() {
         _sliderMode.value = SliderMode.NONE
 
         if (mode == ExposureMode.AUTO) {
-            cameraController.setAutoExposure(true, _exposureValue.value)
+            cameraController?.setAutoExposure(true, _exposureValue.value)
         } else {
-            cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
+            cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         }
         saveSettings()
     }
 
     fun setExposureValue(ev: Float) {
         _exposureValue.value = ev.coerceIn(-2f, 2f)
-        cameraController.setExposureCompensation(ev)
+        cameraController?.setExposureCompensation(ev)
         saveSettings()
     }
 
     fun setIsoValue(iso: Int) {
         _isoValue.value = iso.coerceIn(100, 3200)
-        cameraController.setManualExposure(iso, _shutterSpeedNs.value)
+        cameraController?.setManualExposure(iso, _shutterSpeedNs.value)
         saveSettings()
     }
 
     fun setShutterSpeed(ns: Long) {
         _shutterSpeedNs.value = ns
-        cameraController.setManualExposure(_isoValue.value, ns)
+        cameraController?.setManualExposure(_isoValue.value, ns)
         saveSettings()
     }
 
@@ -269,8 +349,11 @@ class CameraViewModel : ViewModel() {
             _exposureValue.value = p.getFloat("exposure_value", 0f)
             _isoValue.value = p.getInt("iso_value", 400)
             _shutterSpeedNs.value = p.getLong("shutter_speed_ns", 16_666_666L)
-            _outputFormat.value = p.getInt("output_format", 2)
+            _outputFormat.value = p.getInt("output_format", CameraController.OUTPUT_FORMAT_JPEG)
             _bwMode.value = p.getBoolean("bw_mode", false)
+            _colorMode.value = p.getBoolean("color_mode_bw", false)
+            _isFastMode.value = p.getBoolean("fast_mode", false)
+            _redTextMode.value = p.getBoolean("red_text_mode", false)
         }
     }
 
@@ -285,90 +368,223 @@ class CameraViewModel : ViewModel() {
             putLong("shutter_speed_ns", _shutterSpeedNs.value)
             putInt("output_format", _outputFormat.value)
             putBoolean("bw_mode", _bwMode.value)
+            putBoolean("color_mode_bw", _colorMode.value)
+            putBoolean("fast_mode", _isFastMode.value)
+            putBoolean("red_text_mode", _redTextMode.value)
             apply()
         }
     }
 
-    fun createPreviewView(context: Context): PreviewView {
-        return cameraController.createPreviewView(context)
+    fun createPreviewView(context: Context): TextureView {
+        if (cameraController == null) {
+            cameraController = CameraController(context)
+        }
+        return cameraController!!.createPreviewView(context)
     }
 
-    private val bwFormatCode = -1
+    private val hfFormatCode = -2
 
-    fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
-        // If BW mode is active, force JPEG for capture while keeping the format toggle state consistent
-        if (_bwMode.value) {
-            _outputFormat.value = 0
+    fun bindCamera(textureView: TextureView) {
+        val context = appContext ?: return
+
+        if (cameraController == null) {
+            cameraController = CameraController(context)
         }
-        cameraController.setInitialOutputFormat(_outputFormat.value)
-        cameraController.setFlashEnabled(_flashEnabled.value)
-        cameraController.setBwMode(_bwMode.value)
 
-        cameraController.bindCamera(
-            lifecycleOwner,
-            previewView,
+        setupOrientationListener(context)
+
+        if (_isFastMode.value) {
+            _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
+        }
+
+        if (_outputFormat.value != CameraController.OUTPUT_FORMAT_RAW) {
+            _bwMode.value = _colorMode.value
+        } else {
+            _bwMode.value = false
+        }
+
+        cameraController?.setInitialOutputFormat(_outputFormat.value)
+        cameraController?.setFlashEnabled(_flashEnabled.value)
+        cameraController?.setBwMode(_bwMode.value)
+        cameraController?.setFastMode(_isFastMode.value)
+
+        cameraController?.bindCamera(
+            textureView,
             onFormatsAvailable = { formats ->
-                val withBwOption = if (formats.contains(0)) formats + bwFormatCode else formats
-                _availableFormats.value = withBwOption
+                val orderedFormats =
+                    if (formats.contains(CameraController.OUTPUT_FORMAT_JPEG)) {
+                        val hasRaw = formats.contains(CameraController.OUTPUT_FORMAT_RAW)
+                        if (hasRaw) {
+                            listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode, CameraController.OUTPUT_FORMAT_RAW)
+                        } else {
+                            listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode)
+                        }
+                    } else {
+                        formats
+                    }
+                _availableFormats.value = orderedFormats
             },
             onCameraReady = {
                 if (_exposureMode.value == ExposureMode.AUTO) {
-                    cameraController.setAutoExposure(true, _exposureValue.value)
+                    cameraController?.setAutoExposure(true, _exposureValue.value)
                 } else {
-                    cameraController.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
+                    cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
                 }
-            }
+            },
         )
     }
 
+    private fun setupOrientationListener(context: Context) {
+        orientationEventListener?.disable()
+
+        val initialRotation =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching { context.display?.rotation }.getOrNull()
+            } else {
+                @Suppress("DEPRECATION")
+                (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.rotation
+            }
+
+        initialRotation?.let { rotation ->
+            currentRotation = rotation
+            cameraController?.setRotation(rotation)
+            Log.d("CameraViewModel", "Rotation initialized to: $rotation")
+        }
+
+        orientationEventListener =
+            object : OrientationEventListener(context) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) {
+                        return
+                    }
+
+                    val rotation =
+                        when (orientation) {
+                            in 45..134 -> Surface.ROTATION_270
+                            in 135..224 -> Surface.ROTATION_180
+                            in 225..314 -> Surface.ROTATION_90
+                            else -> Surface.ROTATION_0
+                        }
+
+                    if (rotation != currentRotation) {
+                        currentRotation = rotation
+                        cameraController?.setRotation(rotation)
+                        Log.d("CameraViewModel", "Rotation updated to: $rotation (orientation: $orientation°)")
+                    }
+                }
+            }
+
+        orientationEventListener?.enable()
+    }
+
     fun toggleOutputFormat() {
+        if (_isCapturing.value || _isSaving.value) return
+
         val formats = _availableFormats.value
         if (formats.isEmpty()) return
 
-        val currentOption = if (_bwMode.value) bwFormatCode else _outputFormat.value
+        val currentOption =
+            when {
+                _isFastMode.value -> hfFormatCode
+                else -> _outputFormat.value
+            }
         val currentIndex = formats.indexOf(currentOption).takeIf { it >= 0 } ?: 0
         val nextIndex = (currentIndex + 1) % formats.size
         val newOption = formats[nextIndex]
 
-        if (newOption == bwFormatCode) {
-            _bwMode.value = true
-            _outputFormat.value = 0
-            cameraController.setOutputFormat(0)
-            cameraController.setBwMode(true)
-        } else {
-            _bwMode.value = false
-            _outputFormat.value = newOption
-            cameraController.setBwMode(false)
-            cameraController.setOutputFormat(newOption)
+        when (newOption) {
+            hfFormatCode -> {
+                priorPreview = _previewEnabled.value
+                priorFormat = _outputFormat.value
+                priorFlash = _flashEnabled.value
+
+                _isFastMode.value = true
+                _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
+                _bwMode.value = _colorMode.value
+                _flashEnabled.value = false
+
+                cameraController?.setFastMode(true)
+                cameraController?.setBwMode(_bwMode.value)
+                cameraController?.setFlashEnabled(false)
+                cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_JPEG)
+            }
+
+            CameraController.OUTPUT_FORMAT_RAW -> {
+                if (_isFastMode.value) {
+                    _isFastMode.value = false
+                    _previewEnabled.value = priorPreview
+                    _flashEnabled.value = priorFlash
+                    cameraController?.setFastMode(false)
+                    cameraController?.setFlashEnabled(priorFlash)
+                }
+
+                _bwMode.value = false
+                _outputFormat.value = CameraController.OUTPUT_FORMAT_RAW
+                cameraController?.setBwMode(false)
+                cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_RAW)
+            }
+
+            else -> {
+                if (_isFastMode.value) {
+                    _isFastMode.value = false
+                    _previewEnabled.value = priorPreview
+                    _flashEnabled.value = priorFlash
+                    cameraController?.setFastMode(false)
+                    cameraController?.setFlashEnabled(priorFlash)
+                }
+
+                _bwMode.value = _colorMode.value
+                _outputFormat.value = newOption
+                cameraController?.setBwMode(_bwMode.value)
+                cameraController?.setOutputFormat(newOption)
+            }
         }
         saveSettings()
     }
 
     fun setOutputFormat(format: Int) {
         _outputFormat.value = format
-        cameraController.setOutputFormat(format)
+        cameraController?.setOutputFormat(format)
         saveSettings()
     }
 
-    fun getFormatName(format: Int): String {
+    fun toggleColorMode() {
+        if (_isCapturing.value || _isSaving.value) return
+        if (_outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) return
+
+        _colorMode.value = !_colorMode.value
+        _bwMode.value = _colorMode.value
+        cameraController?.setBwMode(_bwMode.value)
+        saveSettings()
+    }
+
+    fun isRawMode(): Boolean = _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
+
+    fun getFormatName(
+        format: Int,
+        fastMode: Boolean = false,
+    ): String {
+        if (fastMode) return "HF"
         return when (format) {
-            0 -> "JPG"
-            2 -> "RAW"
-            bwFormatCode -> "BW"
+            CameraController.OUTPUT_FORMAT_JPEG -> "JPG"
+            CameraController.OUTPUT_FORMAT_RAW -> "RAW"
+            hfFormatCode -> "HF"
             else -> "???"
         }
     }
 
     fun onShutterButtonPress() {
-        if (cameraController.hasPendingCaptures()) {
+        val controller = cameraController ?: return
+
+        if (controller.hasPendingCaptures()) {
             return
         }
 
         lastFocusTimestamp = System.currentTimeMillis()
         _isCapturing.value = true
 
-        viewModelScope.launch {
-            cameraController.takePhoto(
+        if (_isFastMode.value) {
+            controller.takePhoto(
                 onCaptureStarted = {
                     _isCapturing.value = false
                     _isSaving.value = true
@@ -379,12 +595,34 @@ class CameraViewModel : ViewModel() {
                         _capturedImageIsPortrait.value = bitmap.height > bitmap.width
                         _capturedImageBitmap.value = bitmap
                     }
-                    if (_outputFormat.value != 2) {
+                    _isSaving.value = false
+                },
+                onComplete = { _ -> },
+                onBenchmark = { shutterMs, saveMs ->
+                    _lastBenchmark.value = Pair(shutterMs, saveMs)
+                },
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            controller.takePhoto(
+                onCaptureStarted = {
+                    _isCapturing.value = false
+                    _isSaving.value = true
+                    _shutterFlash.value = true
+                },
+                onPreviewReady = { bitmap ->
+                    if (bitmap != null && _previewEnabled.value) {
+                        _capturedImageIsPortrait.value = bitmap.height > bitmap.width
+                        _capturedImageBitmap.value = bitmap
+                    }
+                    if (_outputFormat.value != CameraController.OUTPUT_FORMAT_RAW) {
                         _isSaving.value = false
                     }
                 },
                 onComplete = { uri ->
-                    if (uri != null && _outputFormat.value == 2) {
+                    if (uri != null && _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) {
                         if (_previewEnabled.value) {
                             val thumbnail = extractDngThumbnail(uri)
                             if (thumbnail != null) {
@@ -394,12 +632,17 @@ class CameraViewModel : ViewModel() {
                         }
                         _isSaving.value = false
                     }
-                }
+                },
+                onBenchmark = { shutterMs, saveMs ->
+                    _lastBenchmark.value = Pair(shutterMs, saveMs)
+                },
             )
         }
     }
 
     fun onFocusButtonPress() {
+        if (_isFastMode.value) return
+
         _isFocusButtonHeld.value = true
 
         val currentTime = System.currentTimeMillis()
@@ -407,20 +650,21 @@ class CameraViewModel : ViewModel() {
             lastFocusPoint = null
         }
 
-        val (focusX, focusY) = if (lastFocusPoint != null) {
-            lastFocusPoint!!
-        } else if (screenWidth > 0 && screenHeight > 0) {
-            val centerX = screenWidth / 2f
-            val centerY = screenHeight / 2f
-            lastFocusPoint = Pair(centerX, centerY)
-            Pair(centerX, centerY)
-        } else {
-            return
-        }
+        val (focusX, focusY) =
+            if (lastFocusPoint != null) {
+                lastFocusPoint!!
+            } else if (screenWidth > 0 && screenHeight > 0) {
+                val centerX = screenWidth / 2f
+                val centerY = screenHeight / 2f
+                lastFocusPoint = Pair(centerX, centerY)
+                Pair(centerX, centerY)
+            } else {
+                return
+            }
 
         lastFocusTimestamp = currentTime
         showCrosshair(focusX, focusY)
-        cameraController.onTapToFocus(focusX, focusY, screenWidth, screenHeight)
+        cameraController?.onTapToFocus(focusX, focusY, screenWidth, screenHeight)
     }
 
     fun onFocusButtonRelease() {
@@ -428,19 +672,71 @@ class CameraViewModel : ViewModel() {
         hideCrosshair()
     }
 
-    fun onTapToFocus(x: Float, y: Float, width: Float, height: Float) {
+    fun onTapToFocus(
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+    ) {
+        if (_isFastMode.value) return
         lastFocusPoint = Pair(x, y)
         lastFocusTimestamp = System.currentTimeMillis()
         showCrosshair(x, y)
-        cameraController.onTapToFocus(x, y, width, height)
+        cameraController?.onTapToFocus(x, y, width, height)
     }
 
-    fun hasPendingCaptures(): Boolean {
-        return cameraController.hasPendingCaptures()
+    fun toggleFastMode() {
+        if (_isCapturing.value || _isSaving.value) return
+
+        val enable = !_isFastMode.value
+
+        if (enable) {
+            priorPreview = _previewEnabled.value
+            priorFormat = _outputFormat.value
+
+            _isFastMode.value = true
+            _bwMode.value = false
+            _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
+
+            cameraController?.setFastMode(true)
+            cameraController?.setBwMode(false)
+            cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_JPEG)
+        } else {
+            _isFastMode.value = false
+            _previewEnabled.value = priorPreview
+            _outputFormat.value = priorFormat
+
+            cameraController?.setFastMode(false)
+            cameraController?.setOutputFormat(priorFormat)
+        }
+
+        saveSettings()
+    }
+
+    fun hasPendingCaptures(): Boolean = cameraController?.hasPendingCaptures() ?: false
+
+    fun onPause() {
+        orientationEventListener?.disable()
+        cameraController?.shutdown()
+        cameraController = null
+    }
+
+    fun onResume(textureView: TextureView?) {
+        val context = appContext ?: return
+        val tv = textureView ?: return
+
+        if (cameraController == null) {
+            cameraController = CameraController(context)
+        }
+
+        setupOrientationListener(context)
+        bindCamera(tv)
     }
 
     override fun onCleared() {
         super.onCleared()
-        cameraController.shutdown()
+        orientationEventListener?.disable()
+        orientationEventListener = null
+        cameraController?.shutdown()
     }
 }

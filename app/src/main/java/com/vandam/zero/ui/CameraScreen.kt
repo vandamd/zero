@@ -2,20 +2,13 @@ package com.vandam.zero.ui
 
 import android.Manifest
 import android.os.Build
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Canvas
+import android.view.TextureView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,15 +20,11 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import coil.compose.rememberAsyncImagePainter
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,94 +33,164 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.vandam.zero.R
-import com.vandam.zero.BuildConfig
-import com.vandam.zero.camera.GrayscaleConverter
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vandam.zero.CameraViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import com.vandam.zero.BuildConfig
+import com.vandam.zero.CameraViewModel
+import com.vandam.zero.R
+import com.vandam.zero.camera.CameraController
+import com.vandam.zero.ui.components.Crosshair
+import com.vandam.zero.ui.components.ExposureSlider
+import com.vandam.zero.ui.components.GridOverlay
+import com.vandam.zero.ui.components.IsoSlider
+import com.vandam.zero.ui.components.ShutterSpeedSlider
+import com.vandam.zero.ui.components.formatShutterSpeed
+import com.vandam.zero.ui.components.rotateVertically
+import com.vandam.zero.ui.theme.CameraColors
+import com.vandam.zero.ui.theme.CameraDimens
+import com.vandam.zero.ui.theme.CameraTiming
+import com.vandam.zero.ui.theme.CameraTypography
 import kotlinx.coroutines.delay
-import kotlin.math.pow
-import kotlin.math.log2
-import kotlin.math.abs
-import kotlin.math.round
 
-
+/**
+ * Main camera screen composable that handles permissions and displays the camera UI.
+ *
+ * @param viewModel The CameraViewModel instance.
+ */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
-    val permissions = mutableListOf(Manifest.permission.CAMERA).apply {
-        if (Build.VERSION.SDK_INT <= 28) {
-            add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    val permissions =
+        mutableListOf(Manifest.permission.CAMERA).apply {
+            if (Build.VERSION.SDK_INT <= 28) {
+                add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
         }
-    }
 
-    val permissionsState = rememberMultiplePermissionsState(
-        permissions = permissions
-    )
+    val permissionsState = rememberMultiplePermissionsState(permissions = permissions)
 
     LaunchedEffect(Unit) {
         permissionsState.launchMultiplePermissionRequest()
     }
 
-    val publicSans = FontFamily(
-        Font(R.font.publicsans_variablefont_wght)
-    )
-
     if (permissionsState.allPermissionsGranted) {
         CameraContent(viewModel)
     } else {
-        Box(
-            modifier = Modifier
+        PermissionDeniedContent()
+    }
+}
+
+/**
+ * Content displayed when camera permission is not granted.
+ */
+@Composable
+private fun PermissionDeniedContent() {
+    Box(
+        modifier =
+            Modifier
                 .fillMaxSize()
-                .background(Color.Black)
-                .padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Camera permission is required to use this app.",
-                color = Color.White,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                style = androidx.compose.ui.text.TextStyle(
-                    fontSize = 32.sp,
-                    fontFamily = publicSans,
-                    fontWeight = FontWeight.Bold
-                )
+                .background(CameraColors.background)
+                .padding(CameraDimens.screenPadding),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Camera permission is required to use this app.",
+            color = CameraColors.onSurface,
+            textAlign = TextAlign.Center,
+            style = CameraTypography.permissionText,
+        )
+    }
+}
+
+/**
+ * Main camera content composable containing the camera preview and controls.
+ *
+ * @param viewModel The CameraViewModel instance.
+ */
+@Composable
+private fun CameraContent(viewModel: CameraViewModel) {
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val fixedDensity = Density(density.density, fontScale = 0.85f)
+
+    val uiState = rememberCameraUiState(viewModel)
+
+    CompositionLocalProvider(LocalDensity provides fixedDensity) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            LeftToolbar(
+                uiState = uiState,
+                viewModel = viewModel,
+                haptic = haptic,
+            )
+
+            CameraPreviewArea(
+                uiState = uiState,
+                viewModel = viewModel,
+                haptic = haptic,
             )
         }
     }
 }
 
+/**
+ * Data class holding all camera UI state.
+ */
+private data class CameraUiState(
+    val showFlash: Boolean,
+    val crosshairPosition: Pair<Float, Float>?,
+    val gridEnabled: Boolean,
+    val sliderMode: CameraViewModel.SliderMode,
+    val exposureMode: CameraViewModel.ExposureMode,
+    val exposureValue: Float,
+    val isoValue: Int,
+    val shutterSpeedNs: Long,
+    val isFocusButtonHeld: Boolean,
+    val outputFormat: Int,
+    val flashEnabled: Boolean,
+    val previewEnabled: Boolean,
+    val toastMessage: String?,
+    val colorMode: Boolean,
+    val isCapturing: Boolean,
+    val isSaving: Boolean,
+    val capturedImageBitmap: android.graphics.Bitmap?,
+    val capturedImageIsPortrait: Boolean,
+    val isFastMode: Boolean,
+    val cameraHidden: Boolean,
+    val redTextMode: Boolean,
+) {
+    val isBusy: Boolean get() = isCapturing || isSaving
+    val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
+    val exposureText: String get() = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
+    val textColor: androidx.compose.ui.graphics.Color
+        get() = if (redTextMode) CameraColors.red else CameraColors.onSurface
+    val textColorVariant: androidx.compose.ui.graphics.Color
+        get() = if (redTextMode) CameraColors.redVariant else CameraColors.onSurfaceVariant
+}
+
+/**
+ * Collects all camera UI state from the ViewModel.
+ */
 @Composable
-fun CameraContent(viewModel: CameraViewModel) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val haptic = LocalHapticFeedback.current
+private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val showFlash by viewModel.shutterFlash.collectAsState()
     val crosshairPosition by viewModel.crosshairPosition.collectAsState()
     val gridEnabled by viewModel.gridEnabled.collectAsState()
@@ -145,927 +204,713 @@ fun CameraContent(viewModel: CameraViewModel) {
     val flashEnabled by viewModel.flashEnabled.collectAsState()
     val previewEnabled by viewModel.previewEnabled.collectAsState()
     val toastMessage by viewModel.toastMessage.collectAsState()
-    val bwMode by viewModel.bwMode.collectAsState()
+    val colorMode by viewModel.colorMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
-    val capturedImageUri by viewModel.capturedImageUri.collectAsState()
     val capturedImageBitmap by viewModel.capturedImageBitmap.collectAsState()
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
+    val isFastMode by viewModel.isFastMode.collectAsState()
+    val cameraHidden by viewModel.cameraHidden.collectAsState()
+    val redTextMode by viewModel.redTextMode.collectAsState()
 
-    val publicSans = FontFamily(
-        Font(R.font.publicsans_variablefont_wght)
+    return CameraUiState(
+        showFlash = showFlash,
+        crosshairPosition = crosshairPosition,
+        gridEnabled = gridEnabled,
+        sliderMode = sliderMode,
+        exposureMode = exposureMode,
+        exposureValue = exposureValue,
+        isoValue = isoValue,
+        shutterSpeedNs = shutterSpeedNs,
+        isFocusButtonHeld = isFocusButtonHeld,
+        outputFormat = outputFormat,
+        flashEnabled = flashEnabled,
+        previewEnabled = previewEnabled,
+        toastMessage = toastMessage,
+        colorMode = colorMode,
+        isCapturing = isCapturing,
+        isSaving = isSaving,
+        capturedImageBitmap = capturedImageBitmap,
+        capturedImageIsPortrait = capturedImageIsPortrait,
+        isFastMode = isFastMode,
+        cameraHidden = cameraHidden,
+        redTextMode = redTextMode,
     )
+}
 
-    val density = LocalDensity.current
-    val fixedDensity = Density(density.density, fontScale = 0.85f)
-
-    CompositionLocalProvider(LocalDensity provides fixedDensity) {
-    Row(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .width(60.dp)
+/**
+ * Left toolbar containing exposure controls and settings buttons.
+ */
+@Composable
+private fun LeftToolbar(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+) {
+    Column(
+        modifier =
+            Modifier
+                .background(CameraColors.background)
+                .width(CameraDimens.toolbarWidth)
                 .fillMaxHeight()
-                .background(Color.Black),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(
-                modifier = Modifier.padding(top = 16.dp)
-            ) {
-                if (exposureMode == CameraViewModel.ExposureMode.AUTO) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .width(60.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleExposurePanel()
-                                    },
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.resetExposureToDefault()
-                                    }
-                                )
-                            }
-                            .padding(vertical = 0.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.exposure_stroke_rounded),
-                            contentDescription = "Exposure compensation",
-                            tint = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
-                            else Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier
-                                .size(32.dp)
-                                .rotate(90f)
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = when {
-                                exposureValue == 0f -> "0.0"
-                                exposureValue > 0 -> "+${exposureValue}"
-                                else -> "${exposureValue}"
-                            },
-                            color = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            modifier = Modifier.rotate(90f)
-                        )
-                    }
-                }
-
-                // Manual mode: Show ISO and Shutter Speed
-                if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
-                    // ISO label and value combined
-                    Box(
-                        modifier = Modifier
-                            .width(60.dp)
-                            .height(120.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleIsoPanel()
-                                    },
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.resetIsoToDefault()
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Text(
-                            text = "ISO ${isoValue}",
-                            color = if (sliderMode == CameraViewModel.SliderMode.ISO) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
-                                    )
-                                    // Swap width and height for rotated layout
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = 0,
-                                            y = -placeable.height
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .width(60.dp)
-                            .height(77.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleShutterPanel()
-                                    },
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.resetShutterSpeedToDefault()
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Text(
-                            text = formatShutterSpeed(shutterSpeedNs),
-                            color = if (sliderMode == CameraViewModel.SliderMode.SHUTTER) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
-                                    )
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = 0,
-                                            y = -placeable.height
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                )
-                        )
-                    }
-                }
-            }
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                val isBusy = isCapturing || isSaving
-
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clickable(enabled = !isBusy) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.toggleExposureMode()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
-                        color = Color.White,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 32.sp,
-                            fontFamily = publicSans,
-                            fontWeight = FontWeight.ExtraBold
-                        ),
-                        modifier = Modifier.rotate(90f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Hide format toggle in mono mode (JPEG only)
-                if (!BuildConfig.MONOCHROME_MODE) {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clickable(enabled = !isBusy) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleOutputFormat()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val label = viewModel.getFormatName(if (bwMode) -1 else outputFormat)
-                        Text(
-                            text = label,
-                            color = Color.White,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            modifier = Modifier.rotate(90f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                IconButton(
-                    onClick = {
+                .padding(vertical = CameraDimens.toolbarVerticalPadding),
+        verticalArrangement = Arrangement.SpaceBetween,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        when (uiState.exposureMode) {
+            CameraViewModel.ExposureMode.AUTO -> {
+                AutoExposureControls(
+                    exposureText = uiState.exposureText,
+                    isActive = uiState.sliderMode == CameraViewModel.SliderMode.EXPOSURE,
+                    activeColor = uiState.textColor,
+                    inactiveColor = uiState.textColorVariant,
+                    onTap = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.toggleFlash()
+                        viewModel.toggleExposurePanel()
                     },
-                    modifier = Modifier.size(60.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            id = if (flashEnabled) R.drawable.flash_stroke_rounded
-                            else R.drawable.flash_off_stroke_rounded
-                        ),
-                        contentDescription = "Toggle flash",
-                        tint = Color.Unspecified,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .rotate(90f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(0.dp))
-
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.toggleGrid()
-                                },
-                                onLongPress = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.togglePreview()
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            id = if (gridEnabled) R.drawable.grid_stroke_rounded
-                            else R.drawable.grid_off_stroke_rounded
-                        ),
-                        contentDescription = "Toggle grid",
-                        tint = Color.Unspecified,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .rotate(90f)
-                    )
-                }
+                    onLongPress = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.resetExposureToDefault()
+                    },
+                )
             }
+
+            CameraViewModel.ExposureMode.MANUAL -> {
+                ManualExposureControls(
+                    isoValue = uiState.isoValue,
+                    shutterSpeedNs = uiState.shutterSpeedNs,
+                    sliderMode = uiState.sliderMode,
+                    activeColor = uiState.textColor,
+                    inactiveColor = uiState.textColorVariant,
+                    viewModel = viewModel,
+                    haptic = haptic,
+                )
+            }
+        }
+
+        SettingsButtons(
+            uiState = uiState,
+            viewModel = viewModel,
+            haptic = haptic,
+        )
+    }
+}
+
+/**
+ * Auto exposure compensation controls.
+ */
+@Composable
+private fun AutoExposureControls(
+    exposureText: String,
+    isActive: Boolean,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    val textColor = if (isActive) activeColor else inactiveColor
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier =
+            Modifier.pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onTap() },
+                    onLongPress = { onLongPress() },
+                )
+            },
+    ) {
+        Icon(
+            painter = painterResource(id = R.drawable.exposure_stroke_rounded),
+            contentDescription = "Exposure compensation",
+            tint = textColor,
+            modifier =
+                Modifier
+                    .size(CameraDimens.toolbarIconSize)
+                    .rotate(90f),
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Box(
+            modifier = Modifier.rotateVertically(clockwise = true),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = exposureText,
+                style = CameraTypography.toolbarText,
+                color = textColor,
+            )
+        }
+    }
+}
+
+/**
+ * Manual exposure controls (ISO and Shutter Speed).
+ */
+@Composable
+private fun ManualExposureControls(
+    isoValue: Int,
+    shutterSpeedNs: Long,
+    sliderMode: CameraViewModel.SliderMode,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
+    viewModel: CameraViewModel,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .rotateVertically(clockwise = true)
+                    .padding(start = 8.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleIsoPanel()
+                            },
+                            onLongPress = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.resetIsoToDefault()
+                            },
+                        )
+                    },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "$isoValue",
+                style = CameraTypography.toolbarText,
+                color =
+                    if (sliderMode == CameraViewModel.SliderMode.ISO) {
+                        activeColor
+                    } else {
+                        inactiveColor
+                    },
+            )
         }
 
         Box(
-            modifier = Modifier
-                .weight(1f)
+            modifier =
+                Modifier
+                    .rotateVertically(clockwise = true)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleShutterPanel()
+                            },
+                            onLongPress = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.resetShutterSpeedToDefault()
+                            },
+                        )
+                    },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = formatShutterSpeed(shutterSpeedNs),
+                style = CameraTypography.toolbarText,
+                color =
+                    if (sliderMode == CameraViewModel.SliderMode.SHUTTER) {
+                        activeColor
+                    } else {
+                        inactiveColor
+                    },
+            )
+        }
+    }
+}
+
+/**
+ * Settings buttons (exposure mode, color mode, format, flash, grid).
+ */
+@Composable
+private fun SettingsButtons(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
+    ) {
+        ToolbarTextButton(
+            text = if (uiState.exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
+            color = uiState.textColor,
+            enabled = !uiState.isBusy,
+            onTap = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleExposureMode()
+            },
+        )
+
+        ToolbarTextButton(
+            text =
+                if (uiState.isRawMode) {
+                    "RGB"
+                } else if (uiState.colorMode) {
+                    "BW"
+                } else {
+                    "RGB"
+                },
+            color = uiState.textColor,
+            enabled = !uiState.isBusy && !uiState.isRawMode,
+            alpha = if (uiState.isRawMode) 0.3f else 1f,
+            onTap = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleColorMode()
+            },
+        )
+
+        if (!BuildConfig.MONOCHROME_MODE) {
+            ToolbarTextButton(
+                text = viewModel.getFormatName(uiState.outputFormat, fastMode = uiState.isFastMode),
+                color = uiState.textColor,
+                enabled = !uiState.isBusy,
+                onTap = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.toggleOutputFormat()
+                },
+                onLongPress = {
+                    if (viewModel.toggleRedTextMode()) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                },
+            )
+        }
+
+        ToolbarIconButton(
+            iconRes =
+                if (uiState.flashEnabled) {
+                    R.drawable.flash_stroke_rounded
+                } else {
+                    R.drawable.flash_off_stroke_rounded
+                },
+            contentDescription = "Toggle flash",
+            tint = uiState.textColor,
+            onTap = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleFlash()
+            },
+            onLongPress = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleCameraHidden()
+            },
+            tapEnabled = !uiState.isFastMode,
+        )
+
+        ToolbarIconButton(
+            iconRes =
+                if (uiState.gridEnabled) {
+                    R.drawable.grid_stroke_rounded
+                } else {
+                    R.drawable.grid_off_stroke_rounded
+                },
+            contentDescription = "Toggle grid",
+            tint = uiState.textColor,
+            onTap = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleGrid()
+            },
+            onLongPress = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.togglePreview()
+            },
+        )
+    }
+}
+
+/**
+ * Toolbar text button with rotation.
+ */
+@Composable
+private fun ToolbarTextButton(
+    text: String,
+    color: androidx.compose.ui.graphics.Color = CameraColors.onSurface,
+    enabled: Boolean = true,
+    alpha: Float = 1f,
+    onTap: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+) {
+    Box(
+        modifier =
+            Modifier
+                .rotateVertically(clockwise = true)
+                .pointerInput(enabled) {
+                    if (enabled) {
+                        detectTapGestures(
+                            onTap = { onTap() },
+                            onLongPress = { onLongPress?.invoke() },
+                        )
+                    }
+                },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = CameraTypography.toolbarText,
+            color = color.copy(alpha = alpha),
+        )
+    }
+}
+
+/**
+ * Toolbar icon button with rotation and gesture support.
+ */
+@Composable
+private fun ToolbarIconButton(
+    iconRes: Int,
+    contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    tapEnabled: Boolean = true,
+) {
+    Box(
+        modifier =
+            Modifier
+                .rotateVertically(clockwise = true)
+                .pointerInput(tapEnabled) {
+                    detectTapGestures(
+                        onTap = { if (tapEnabled) onTap() },
+                        onLongPress = { onLongPress() },
+                    )
+                },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(id = iconRes),
+            contentDescription = contentDescription,
+            tint = tint.copy(alpha = if (tapEnabled) 1f else 0.3f),
+            modifier = Modifier.size(CameraDimens.toolbarIconSize),
+        )
+    }
+}
+
+/**
+ * Camera preview area containing the preview, overlays, and sliders.
+ */
+@Composable
+private fun CameraPreviewArea(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+) {
+    Box(
+        modifier =
+            Modifier
                 .fillMaxHeight()
-                .background(Color.Black)
+                .background(CameraColors.background)
                 .onSizeChanged { size ->
                     viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
-                }
-        ) {
-            AndroidView(
-                factory = { ctx ->
-                    viewModel.createPreviewView(ctx)
                 },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = if (showFlash) 0f else 1f }
-                    .pointerInput(Unit) {
+    ) {
+        CameraTextureView(
+            uiState = uiState,
+            viewModel = viewModel,
+        )
+
+        if (!uiState.showFlash && !uiState.cameraHidden) {
+            CrosshairOverlay(crosshairPosition = uiState.crosshairPosition)
+
+            if (uiState.gridEnabled) {
+                GridOverlay()
+            }
+        }
+
+        SliderPanel(
+            sliderMode = uiState.sliderMode,
+            exposureValue = uiState.exposureValue,
+            isoValue = uiState.isoValue,
+            shutterSpeedNs = uiState.shutterSpeedNs,
+            viewModel = viewModel,
+        )
+
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            StatusPanel(
+                uiState = uiState,
+                viewModel = viewModel,
+            )
+        }
+
+        ShutterFlashEffect(
+            showFlash = uiState.showFlash,
+            haptic = haptic,
+            onFlashComplete = { viewModel.resetShutterFlash() },
+        )
+
+        if (uiState.previewEnabled) {
+            CapturedImagePreview(
+                bitmap = uiState.capturedImageBitmap,
+                isPortrait = uiState.capturedImageIsPortrait,
+                onPreviewTimeout = { viewModel.clearCapturedImageUri() },
+            )
+        }
+
+        CrosshairAutoHide(
+            crosshairPosition = uiState.crosshairPosition,
+            isFocusButtonHeld = uiState.isFocusButtonHeld,
+            onHide = { viewModel.hideCrosshair() },
+        )
+    }
+}
+
+/**
+ * Camera preview TextureView with lifecycle handling.
+ */
+@Composable
+private fun CameraTextureView(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+) {
+    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_PAUSE -> {
+                        viewModel.onPause()
+                    }
+
+                    Lifecycle.Event.ON_RESUME -> {
+                        textureViewRef?.let { viewModel.onResume(it) }
+                    }
+
+                    else -> {}
+                }
+            }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            viewModel.createPreviewView(ctx).also { textureViewRef = it }
+        },
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = if (uiState.showFlash || uiState.cameraHidden) 0f else 1f }
+                .pointerInput(uiState.cameraHidden) {
+                    if (!uiState.cameraHidden) {
                         detectTapGestures { offset ->
-                            viewModel.onTapToFocus(offset.x, offset.y, size.width.toFloat(), size.height.toFloat())
-                        }
-                    },
-                update = { previewView ->
-                    viewModel.bindCamera(lifecycleOwner, previewView)
-                }
-            )
-
-            if (!showFlash) {
-                crosshairPosition?.let { (x, y) ->
-                    val density = LocalDensity.current
-                    val crosshairSizePx = with(density) { 80.dp.toPx() }
-
-                    Crosshair(
-                        modifier = Modifier.offset(
-                            x = with(density) { (x - crosshairSizePx / 2f).toDp() },
-                            y = with(density) { (y - crosshairSizePx / 2f).toDp() }
-                        )
-                    )
-                }
-
-                if (gridEnabled) {
-                    GridOverlay()
-                }
-            }
-
-            when (sliderMode) {
-                CameraViewModel.SliderMode.EXPOSURE -> {
-                    ExposureSlider(
-                        value = exposureValue,
-                        onValueChange = { viewModel.setExposureValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.ISO -> {
-                    IsoSlider(
-                        value = isoValue,
-                        onValueChange = { viewModel.setIsoValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.SHUTTER -> {
-                    ShutterSpeedSlider(
-                        value = shutterSpeedNs,
-                        onValueChange = { viewModel.setShutterSpeed(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.NONE -> {}
-            }
-
-            // Top toolbar (right side of device, top when held sideways)
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(60.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Toast message at top (appears at start when held sideways)
-                Box(
-                    modifier = Modifier
-                        .width(60.dp)
-                        .height(200.dp)
-                        .padding(top = 16.dp),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    toastMessage?.let { message ->
-                        Text(
-                            text = message,
-                            color = Color.White,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
-                                    )
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = (placeable.height - placeable.width) / 2,
-                                            y = (placeable.width - placeable.height) / 2
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0.5f, 0.5f)
-                                )
-                        )
-
-                        LaunchedEffect(message) {
-                            delay(1500)
-                            viewModel.clearToastMessage()
-                        }
-                    }
-                }
-
-                // Status at bottom
-                Box(
-                    modifier = Modifier
-                        .width(60.dp)
-                        .height(120.dp)
-                        .padding(bottom = 16.dp),
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Text(
-                        text = when {
-                            isCapturing -> "HOLD"
-                            isSaving -> "SAVING"
-                            else -> "READY"
-                        },
-                        color = Color.White,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 32.sp,
-                            fontFamily = publicSans,
-                            fontWeight = FontWeight.ExtraBold
-                        ),
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier
-                            .layout { measurable, constraints ->
-                                val placeable = measurable.measure(
-                                    constraints.copy(
-                                        minWidth = 0,
-                                        maxWidth = Int.MAX_VALUE
-                                    )
-                                )
-                                layout(placeable.height, placeable.width) {
-                                    placeable.place(
-                                        x = (placeable.height - placeable.width) / 2,
-                                        y = (placeable.width - placeable.height) / 2
-                                    )
-                                }
-                            }
-                            .graphicsLayer(
-                                rotationZ = 90f,
-                                transformOrigin = TransformOrigin(0.5f, 0.5f)
+                            viewModel.onTapToFocus(
+                                offset.x,
+                                offset.y,
+                                size.width.toFloat(),
+                                size.height.toFloat(),
                             )
-                    )
-                }
-            }
-
-            LaunchedEffect(showFlash) {
-                if (showFlash) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    delay(50)
-                    viewModel.resetShutterFlash()
-                }
-            }
-
-            if (previewEnabled) {
-                capturedImageBitmap?.let { bitmap ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = 24.dp),
-                        contentAlignment = Alignment.BottomStart
-                    ) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Captured photo",
-                            modifier = Modifier
-                                .size(200.dp)
-                                .then(
-                                    if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
-                                ),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                        )
+                        }
                     }
-
-                    LaunchedEffect(bitmap) {
-                        delay(800)
-                        viewModel.clearCapturedImageUri()
-                    }
-                }
-            }
-
-            LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
-                if (crosshairPosition != null && !isFocusButtonHeld) {
-                    delay(2000)
-                    viewModel.hideCrosshair()
-                }
-            }
-        }
-    }
-    }
-}
-
-@Composable
-fun Crosshair(modifier: Modifier = Modifier) {
-    Canvas(
-        modifier = modifier.size(80.dp)
-    ) {
-        val strokeWidth = 2f
-        val notchLength = 10f
-
-        val left = 0f
-        val top = 0f
-        val right = size.width
-        val bottom = size.height
-        val centerX = size.width / 2f
-        val centerY = size.height / 2f
-
-        drawLine(
-            color = Color.White,
-            start = Offset(left, top),
-            end = Offset(right, top),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(right, top),
-            end = Offset(right, bottom),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(right, bottom),
-            end = Offset(left, bottom),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(left, bottom),
-            end = Offset(left, top),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(centerX, top),
-            end = Offset(centerX, top + notchLength),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(centerX, bottom),
-            end = Offset(centerX, bottom - notchLength),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(left, centerY),
-            end = Offset(left + notchLength, centerY),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = Color.White,
-            start = Offset(right, centerY),
-            end = Offset(right - notchLength, centerY),
-            strokeWidth = strokeWidth
-        )
-    }
-}
-
-@Composable
-fun GridOverlay() {
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val strokeWidth = 3f
-        val gridColor = Color.White
-
-        val thirdWidth = size.width / 3f
-        val thirdHeight = size.height / 3f
-
-        drawLine(
-            color = gridColor,
-            start = Offset(thirdWidth, 0f),
-            end = Offset(thirdWidth, size.height),
-            strokeWidth = strokeWidth
-        )
-        drawLine(
-            color = gridColor,
-            start = Offset(thirdWidth * 2f, 0f),
-            end = Offset(thirdWidth * 2f, size.height),
-            strokeWidth = strokeWidth
-        )
-
-        drawLine(
-            color = gridColor,
-            start = Offset(0f, thirdHeight),
-            end = Offset(size.width, thirdHeight),
-            strokeWidth = strokeWidth
-        )
-        drawLine(
-            color = gridColor,
-            start = Offset(0f, thirdHeight * 2f),
-            end = Offset(size.width, thirdHeight * 2f),
-            strokeWidth = strokeWidth
-        )
-    }
-}
-
-@Composable
-fun ExposureSlider(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val haptic = LocalHapticFeedback.current
-    var lastSnappedValue by remember { mutableStateOf(value) }
-
-    Canvas(
-        modifier = modifier
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val fraction = change.position.x / size.width
-                    val rawValue = (-2f + (fraction * 4f)).coerceIn(-2f, 2f)
-                    val snappedValue = (kotlin.math.round(rawValue * 2f) / 2f).coerceIn(-2f, 2f)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val fraction = offset.x / size.width
-                    val rawValue = (-2f + (fraction * 4f)).coerceIn(-2f, 2f)
-                    val snappedValue = (kotlin.math.round(rawValue * 2f) / 2f).coerceIn(-2f, 2f)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-    ) {
-        val trackStrokeWidth = 3f
-        val thumbStrokeWidth = 8f
-        val centerY = size.height / 2f
-        val notchLength = 16f
-        val trackColor = Color.White
-
-        drawLine(
-            color = trackColor,
-            start = Offset(0f, centerY),
-            end = Offset(size.width, centerY),
-            strokeWidth = trackStrokeWidth
-        )
-
-        val evSteps = listOf(-2f, -1.5f, -1f, -0.5f, 0f, 0.5f, 1f, 1.5f, 2f)
-        evSteps.forEach { ev ->
-            val normalizedValue = (ev + 2f) / 4f
-            val notchX = normalizedValue * size.width
-
-            val length = when {
-                ev == 0f -> notchLength * 2.2f
-                ev % 1f == 0f -> notchLength * 1.8f
-                else -> notchLength
-            }
-
-            drawLine(
-                color = trackColor,
-                start = Offset(notchX, centerY - length / 2f),
-                end = Offset(notchX, centerY + length / 2f),
-                strokeWidth = trackStrokeWidth
-            )
-        }
-
-        val normalizedValue = (value + 2f) / 4f
-        val thumbX = normalizedValue * size.width
-
-        drawLine(
-            color = Color.White,
-            start = Offset(thumbX, 0f),
-            end = Offset(thumbX, size.height),
-            strokeWidth = thumbStrokeWidth
-        )
-    }
-}
-
-@Composable
-fun IsoSlider(
-    value: Int,
-    onValueChange: (Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val haptic = LocalHapticFeedback.current
-    var lastSnappedValue by remember { mutableStateOf(value) }
-
-    fun positionToIso(position: Float): Int {
-        val logValue = 100 * 2.0.pow((position * 5).toDouble())
-        return logValue.toInt().coerceIn(100, 3200)
-    }
-
-    fun isoToPosition(iso: Int): Float {
-        val position = log2(iso / 100.0) / 5.0
-        return position.toFloat().coerceIn(0f, 1f)
-    }
-    fun snapToNearestIso(iso: Int): Int {
-        val validIsos = listOf(100, 200, 400, 800, 1600, 3200)
-        return validIsos.minByOrNull { abs(it - iso) } ?: 400
-    }
-
-    Canvas(
-        modifier = modifier
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val rawValue = positionToIso(fraction)
-                    val snappedValue = snapToNearestIso(rawValue)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                    val rawValue = positionToIso(fraction)
-                    val snappedValue = snapToNearestIso(rawValue)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-    ) {
-        val trackStrokeWidth = 3f
-        val thumbStrokeWidth = 8f
-        val centerY = size.height / 2f
-        val notchLength = 16f
-        val trackColor = Color.White
-
-        drawLine(
-            color = trackColor,
-            start = Offset(0f, centerY),
-            end = Offset(size.width, centerY),
-            strokeWidth = trackStrokeWidth
-        )
-
-        val isoSteps = listOf(100, 200, 400, 800, 1600, 3200)
-        isoSteps.forEach { iso ->
-            val normalizedValue = isoToPosition(iso)
-            val notchX = normalizedValue * size.width
-
-            val length = when (iso) {
-                400 -> notchLength * 2.2f
-                800, 1600 -> notchLength * 1.8f
-                else -> notchLength
-            }
-
-            drawLine(
-                color = trackColor,
-                start = Offset(notchX, centerY - length / 2f),
-                end = Offset(notchX, centerY + length / 2f),
-                strokeWidth = trackStrokeWidth
-            )
-        }
-
-        val normalizedValue = isoToPosition(value)
-        val thumbX = normalizedValue * size.width
-
-        drawLine(
-            color = Color.White,
-            start = Offset(thumbX, 0f),
-            end = Offset(thumbX, size.height),
-            strokeWidth = thumbStrokeWidth
-        )
-    }
-}
-
-fun formatShutterSpeed(ns: Long): String {
-    val seconds = ns / 1_000_000_000.0
-    return when {
-        seconds >= 1.0 -> "${seconds.toInt()}s"
-        else -> "1/${(1.0 / seconds).toInt()}"
-    }
-}
-
-@Composable
-fun ShutterSpeedSlider(
-    value: Long,
-    onValueChange: (Long) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val haptic = LocalHapticFeedback.current
-    var lastSnappedValue by remember { mutableStateOf(value) }
-
-    val shutterSpeeds = listOf(
-        1_000_000L,
-        2_000_000L,
-        4_000_000L,
-        8_000_000L,
-        16_666_666L,
-        33_333_333L,
-        66_666_666L,
-        125_000_000L,
-        250_000_000L,
-        500_000_000L,
-        1_000_000_000L
+                },
+        update = { textureView ->
+            viewModel.bindCamera(textureView)
+        },
     )
+}
 
-    fun positionToShutter(position: Float): Long {
-        val index = (position * (shutterSpeeds.size - 1)).toInt().coerceIn(0, shutterSpeeds.size - 1)
-        return shutterSpeeds[index]
-    }
+/**
+ * Crosshair focus indicator overlay.
+ */
+@Composable
+private fun CrosshairOverlay(crosshairPosition: Pair<Float, Float>?) {
+    crosshairPosition?.let { (x, y) ->
+        val density = LocalDensity.current
+        val crosshairSizePx = with(density) { CameraDimens.crosshairSize.toPx() }
 
-    fun shutterToPosition(shutter: Long): Float {
-        val index = shutterSpeeds.indexOfFirst { it >= shutter }.takeIf { it >= 0 } ?: (shutterSpeeds.size - 1)
-        return index.toFloat() / (shutterSpeeds.size - 1)
-    }
-
-    fun snapToNearestShutter(ns: Long): Long {
-        return shutterSpeeds.minByOrNull { abs(it - ns) } ?: 16_666_666L
-    }
-
-    Canvas(
-        modifier = modifier
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val rawValue = positionToShutter(fraction)
-                    val snappedValue = snapToNearestShutter(rawValue)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                    val rawValue = positionToShutter(fraction)
-                    val snappedValue = snapToNearestShutter(rawValue)
-                    if (snappedValue != lastSnappedValue) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        lastSnappedValue = snappedValue
-                        onValueChange(snappedValue)
-                    }
-                }
-            }
-    ) {
-        val trackStrokeWidth = 3f
-        val thumbStrokeWidth = 8f
-        val centerY = size.height / 2f
-        val notchLength = 16f
-        val trackColor = Color.White
-
-        drawLine(
-            color = trackColor,
-            start = Offset(0f, centerY),
-            end = Offset(size.width, centerY),
-            strokeWidth = trackStrokeWidth
+        Crosshair(
+            modifier =
+                Modifier.offset(
+                    x = with(density) { (x - crosshairSizePx / 2f).toDp() },
+                    y = with(density) { (y - crosshairSizePx / 2f).toDp() },
+                ),
         )
+    }
+}
 
-        shutterSpeeds.forEachIndexed { index, speed ->
-            val normalizedValue = index.toFloat() / (shutterSpeeds.size - 1)
-            val notchX = normalizedValue * size.width
+/**
+ * Slider panel for exposure, ISO, or shutter speed adjustment.
+ */
+@Composable
+private fun SliderPanel(
+    sliderMode: CameraViewModel.SliderMode,
+    exposureValue: Float,
+    isoValue: Int,
+    shutterSpeedNs: Long,
+    viewModel: CameraViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val sliderModifier =
+        modifier
+            .fillMaxWidth()
+            .height(CameraDimens.sliderHeight)
+            .padding(
+                start = CameraDimens.sliderHorizontalPadding,
+                end = CameraDimens.sliderHorizontalPadding + CameraDimens.statusPanelWidth,
+                top = CameraDimens.sliderVerticalPadding,
+                bottom = CameraDimens.sliderVerticalPadding,
+            )
 
-            val length = when (speed) {
-                16_666_666L -> notchLength * 2.2f
-                8_000_000L, 33_333_333L -> notchLength * 1.8f
-                else -> notchLength
+    when (sliderMode) {
+        CameraViewModel.SliderMode.EXPOSURE -> {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                ExposureSlider(
+                    value = exposureValue,
+                    onValueChange = { viewModel.setExposureValue(it) },
+                    modifier = sliderModifier,
+                )
             }
+        }
 
-            drawLine(
-                color = trackColor,
-                start = Offset(notchX, centerY - length / 2f),
-                end = Offset(notchX, centerY + length / 2f),
-                strokeWidth = trackStrokeWidth
+        CameraViewModel.SliderMode.ISO -> {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                IsoSlider(
+                    value = isoValue,
+                    onValueChange = { viewModel.setIsoValue(it) },
+                    modifier = sliderModifier,
+                )
+            }
+        }
+
+        CameraViewModel.SliderMode.SHUTTER -> {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                ShutterSpeedSlider(
+                    value = shutterSpeedNs,
+                    onValueChange = { viewModel.setShutterSpeed(it) },
+                    modifier = sliderModifier,
+                )
+            }
+        }
+
+        CameraViewModel.SliderMode.NONE -> { /* No slider shown */ }
+    }
+}
+
+/**
+ * Right status panel showing toast messages and capture status.
+ */
+@Composable
+private fun StatusPanel(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier =
+            modifier
+                .fillMaxHeight()
+                .width(CameraDimens.statusPanelWidth)
+                .padding(vertical = CameraDimens.statusPanelVerticalPadding),
+        verticalArrangement = Arrangement.SpaceBetween,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box {
+            uiState.toastMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = uiState.textColor,
+                    style = CameraTypography.toolbarText,
+                    modifier = Modifier.rotateVertically(clockwise = true),
+                )
+
+                LaunchedEffect(message) {
+                    delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
+                    viewModel.clearToastMessage()
+                }
+            }
+        }
+
+        Text(
+            text =
+                when {
+                    uiState.isCapturing -> "HOLD"
+                    uiState.isSaving -> "SAVING"
+                    else -> "READY"
+                },
+            color = uiState.textColor,
+            style = CameraTypography.toolbarText,
+            modifier = Modifier.rotateVertically(clockwise = true),
+        )
+    }
+}
+
+/**
+ * Shutter flash visual effect.
+ */
+@Composable
+private fun ShutterFlashEffect(
+    showFlash: Boolean,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+    onFlashComplete: () -> Unit,
+) {
+    LaunchedEffect(showFlash) {
+        if (showFlash) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            delay(CameraTiming.SHUTTER_FLASH_DURATION_MS)
+            onFlashComplete()
+        }
+    }
+}
+
+/**
+ * Captured image preview thumbnail.
+ */
+@Composable
+private fun CapturedImagePreview(
+    bitmap: android.graphics.Bitmap?,
+    isPortrait: Boolean,
+    onPreviewTimeout: () -> Unit,
+) {
+    bitmap?.let {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(bottom = CameraDimens.previewBottomPadding),
+            contentAlignment = Alignment.BottomStart,
+        ) {
+            Image(
+                bitmap = it.asImageBitmap(),
+                contentDescription = "Captured photo",
+                modifier =
+                    Modifier
+                        .size(CameraDimens.previewThumbnailSize)
+                        .then(if (!isPortrait) Modifier.rotate(90f) else Modifier),
+                contentScale = ContentScale.Fit,
             )
         }
 
-        val normalizedValue = shutterToPosition(value)
-        val thumbX = normalizedValue * size.width
+        LaunchedEffect(bitmap) {
+            delay(CameraTiming.PREVIEW_DISPLAY_DURATION_MS)
+            onPreviewTimeout()
+        }
+    }
+}
 
-        drawLine(
-            color = Color.White,
-            start = Offset(thumbX, 0f),
-            end = Offset(thumbX, size.height),
-            strokeWidth = thumbStrokeWidth
-        )
+/**
+ * Auto-hide crosshair after timeout.
+ */
+@Composable
+private fun CrosshairAutoHide(
+    crosshairPosition: Pair<Float, Float>?,
+    isFocusButtonHeld: Boolean,
+    onHide: () -> Unit,
+) {
+    LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
+        if (crosshairPosition != null && !isFocusButtonHeld) {
+            delay(CameraTiming.CROSSHAIR_HIDE_DELAY_MS)
+            onHide()
+        }
     }
 }

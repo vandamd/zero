@@ -40,7 +40,10 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+    override fun onKeyDown(
+        keyCode: Int,
+        event: KeyEvent?,
+    ): Boolean {
         Log.d("ZeroKeys", "KeyDown: $keyCode")
         return when (keyCode) {
             KeyEvent.KEYCODE_CAMERA -> {
@@ -50,6 +53,7 @@ class MainActivity : ComponentActivity() {
                 }
                 true
             }
+
             KeyEvent.KEYCODE_FOCUS -> {
                 if (event?.repeatCount == 0) {
                     Log.d("ZeroKeys", "Focus Button Pressed")
@@ -57,43 +61,65 @@ class MainActivity : ComponentActivity() {
                 }
                 true
             }
-            else -> super.onKeyDown(keyCode, event)
+
+            else -> {
+                super.onKeyDown(keyCode, event)
+            }
         }
     }
 
-    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+    override fun onKeyUp(
+        keyCode: Int,
+        event: KeyEvent?,
+    ): Boolean {
         Log.d("ZeroKeys", "KeyUp: $keyCode")
         return when (keyCode) {
             KeyEvent.KEYCODE_FOCUS -> {
                 viewModel.onFocusButtonRelease()
                 true
             }
-            else -> super.onKeyUp(keyCode, event)
+
+            else -> {
+                super.onKeyUp(keyCode, event)
+            }
         }
     }
 
     private fun logColorFilterSettings() {
-        val daltonizerEnabled = Settings.Secure.getInt(
-            contentResolver, "accessibility_display_daltonizer_enabled", 0
-        )
-        val daltonizerMode = Settings.Secure.getInt(
-            contentResolver, "accessibility_display_daltonizer", 0
-        )
-        val inversionEnabled = Settings.Secure.getInt(
-            contentResolver, "accessibility_display_inversion_enabled", 0
-        )
-        val nightDisplayEnabled = Settings.Secure.getInt(
-            contentResolver, "night_display_activated", 0
-        )
+        val daltonizerEnabled =
+            Settings.Secure.getInt(
+                contentResolver,
+                "accessibility_display_daltonizer_enabled",
+                0,
+            )
+        val daltonizerMode =
+            Settings.Secure.getInt(
+                contentResolver,
+                "accessibility_display_daltonizer",
+                0,
+            )
+        val inversionEnabled =
+            Settings.Secure.getInt(
+                contentResolver,
+                "accessibility_display_inversion_enabled",
+                0,
+            )
+        val nightDisplayEnabled =
+            Settings.Secure.getInt(
+                contentResolver,
+                "night_display_activated",
+                0,
+            )
 
-        val modeName = when (daltonizerMode) {
-            0 -> "Disabled"
-            11 -> "Grayscale"
-            12 -> "Protanomaly (red-weak)"
-            13 -> "Deuteranomaly (green-weak)"
-            14 -> "Tritanomaly (blue-weak)"
-            else -> "Unknown ($daltonizerMode)"
-        }
+        val modeName =
+            when (daltonizerMode) {
+                0 -> "Disabled"
+                11 -> "Grayscale"
+                12 -> "Protanomaly (red-weak)"
+                13 -> "Deuteranomaly (green-weak)"
+                14 -> "Tritanomaly (blue-weak)"
+                else -> "Unknown ($daltonizerMode)"
+            }
 
         Log.d("ZeroColorFilter", "=== Color Filter Settings ===")
         Log.d("ZeroColorFilter", "Daltonizer enabled: ${daltonizerEnabled == 1}")
@@ -103,12 +129,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun disableGrayscale() {
-        val daltonizerEnabled = Settings.Secure.getInt(
-            contentResolver, "accessibility_display_daltonizer_enabled", 0
-        )
-        val daltonizerMode = Settings.Secure.getInt(
-            contentResolver, "accessibility_display_daltonizer", 0
-        )
+        val daltonizerEnabled =
+            Settings.Secure.getInt(
+                contentResolver,
+                "accessibility_display_daltonizer_enabled",
+                0,
+            )
+        val daltonizerMode =
+            Settings.Secure.getInt(
+                contentResolver,
+                "accessibility_display_daltonizer",
+                0,
+            )
 
         // Store if daltonizer was enabled at all (any mode)
         wasGrayscaleEnabled = daltonizerEnabled == 1
@@ -119,7 +151,10 @@ class MainActivity : ComponentActivity() {
                 Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer_enabled", 0)
                 Log.d("ZeroColorFilter", "Daltonizer disabled on app start (was mode: $daltonizerMode)")
             } catch (e: SecurityException) {
-                Log.e("ZeroColorFilter", "No permission to change settings. Run: adb shell pm grant com.vandam.zero android.permission.WRITE_SECURE_SETTINGS")
+                Log.e(
+                    "ZeroColorFilter",
+                    "No permission to change settings. Run: adb shell pm grant com.vandam.zero android.permission.WRITE_SECURE_SETTINGS",
+                )
             }
         } else {
             Log.d("ZeroColorFilter", "Daltonizer was not enabled, nothing to disable")
