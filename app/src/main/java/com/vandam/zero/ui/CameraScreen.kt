@@ -372,6 +372,7 @@ private fun ManualExposureControls(
             modifier =
                 Modifier
                     .rotateVertically(clockwise = true)
+                    .padding(start = 8.dp)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = {
