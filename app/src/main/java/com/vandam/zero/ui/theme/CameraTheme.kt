@@ -66,7 +66,7 @@ object CameraDimens {
 
     // Sliders
     val sliderHeight = 60.dp
-    val sliderHorizontalPadding = 24.dp
+    val sliderHorizontalPadding = 12.dp
     val sliderVerticalPadding = 12.dp
     val sliderTrackStrokeWidth = 3f
     val sliderThumbStrokeWidth = 8f

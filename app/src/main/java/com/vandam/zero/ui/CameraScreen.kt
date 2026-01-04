@@ -742,8 +742,10 @@ private fun SliderPanel(
             .fillMaxWidth()
             .height(CameraDimens.sliderHeight)
             .padding(
-                horizontal = CameraDimens.sliderHorizontalPadding,
-                vertical = CameraDimens.sliderVerticalPadding,
+                start = CameraDimens.sliderHorizontalPadding,
+                end = CameraDimens.sliderHorizontalPadding + CameraDimens.statusPanelWidth,
+                top = CameraDimens.sliderVerticalPadding,
+                bottom = CameraDimens.sliderVerticalPadding,
             )
 
     when (sliderMode) {
