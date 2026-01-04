@@ -11,6 +11,7 @@ import android.hardware.camera2.*
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
 import android.net.Uri
@@ -100,6 +101,13 @@ class CameraController(
 
     private var onCameraReadyCallback: (() -> Unit)? = null
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
+
+    private val identityTonemapCurve =
+        TonemapCurve(
+            floatArrayOf(0f, 0f, 1f, 1f),
+            floatArrayOf(0f, 0f, 1f, 1f),
+            floatArrayOf(0f, 0f, 1f, 1f),
+        )
 
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
@@ -474,12 +482,17 @@ class CameraController(
         builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
         builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+
+        // Minimize tonemapping: use linear identity curve everywhere
+        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+        builder.set(CaptureRequest.TONEMAP_CURVE, identityTonemapCurve)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
         }
 
+        // Keep AWB on but otherwise avoid color processing
         builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+        builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF)
         builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
 
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
