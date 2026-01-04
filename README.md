@@ -20,8 +20,8 @@ I recommend using [Obtainium](https://github.com/ImranR98/Obtainium) and adding 
     - Hot pixel correction: OFF
     - Lens shading correction: OFF
     - Distortion correction: OFF
-    - Tonemap: FAST
-    - Color correction: FAST
+    - Tonemap: linear identity curve
+    - Color correction: FAST (AWB on, aberration OFF)
 - Low latency (~160ms from shutter press to exposure) for JPG and RAW
 - Zero shutter lag with Hyperfocal mode
 - Manual and Auto exposure
