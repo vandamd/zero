@@ -48,7 +48,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.graphics.TransformOrigin
+
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -58,33 +58,61 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalLifecycleOwner
+
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.TextureView
 import androidx.compose.ui.viewinterop.AndroidView
 import com.vandam.zero.R
 import com.vandam.zero.BuildConfig
 import com.vandam.zero.camera.GrayscaleConverter
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vandam.zero.CameraViewModel
+import com.vandam.zero.camera.CameraController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import kotlin.math.pow
 import kotlin.math.log2
 import kotlin.math.abs
 import kotlin.math.round
 
+fun Modifier.rotateVertically(clockwise: Boolean = true): Modifier {
+    val rotateBy = if (clockwise) 90f else -90f
 
+    return layout { measurable, constraints ->
+        val swappedConstraints = constraints.copy(
+            minWidth = constraints.minHeight,
+            maxWidth = constraints.maxHeight,
+            minHeight = constraints.minWidth,
+            maxHeight = constraints.maxWidth
+        )
+
+        val placeable = measurable.measure(swappedConstraints)
+
+        layout(placeable.height, placeable.width) {
+            placeable.placeWithLayer(
+                x = -(placeable.width / 2) + (placeable.height / 2),
+                y = -(placeable.height / 2) + (placeable.width / 2)
+            ) {
+                rotationZ = rotateBy
+            }
+        }
+    }
+}
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
+fun cameraScreen(viewModel: CameraViewModel = viewModel()) {
     val permissions = mutableListOf(Manifest.permission.CAMERA).apply {
         if (Build.VERSION.SDK_INT <= 28) {
             add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -104,7 +132,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     )
 
     if (permissionsState.allPermissionsGranted) {
-        CameraContent(viewModel)
+        cameraContent(viewModel)
     } else {
         Box(
             modifier = Modifier
@@ -117,7 +145,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                 text = "Camera permission is required to use this app.",
                 color = Color.White,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                style = androidx.compose.ui.text.TextStyle(
+                style = TextStyle(
                     fontSize = 32.sp,
                     fontFamily = publicSans,
                     fontWeight = FontWeight.Bold
@@ -128,9 +156,8 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 }
 
 @Composable
-fun CameraContent(viewModel: CameraViewModel) {
+fun cameraContent(viewModel: CameraViewModel) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val haptic = LocalHapticFeedback.current
     val showFlash by viewModel.shutterFlash.collectAsState()
     val crosshairPosition by viewModel.crosshairPosition.collectAsState()
@@ -146,37 +173,43 @@ fun CameraContent(viewModel: CameraViewModel) {
     val previewEnabled by viewModel.previewEnabled.collectAsState()
     val toastMessage by viewModel.toastMessage.collectAsState()
     val bwMode by viewModel.bwMode.collectAsState()
+    val colorMode by viewModel.colorMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val capturedImageUri by viewModel.capturedImageUri.collectAsState()
     val capturedImageBitmap by viewModel.capturedImageBitmap.collectAsState()
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
-
-    val publicSans = FontFamily(
-        Font(R.font.publicsans_variablefont_wght)
-    )
-
+    val isFast by viewModel.isFastMode.collectAsState()
+    val cameraHidden by viewModel.cameraHidden.collectAsState()
+    val publicSans = FontFamily( Font(R.font.publicsans_variablefont_wght))
     val density = LocalDensity.current
     val fixedDensity = Density(density.density, fontScale = 0.85f)
+    val exposureText = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
+    val isBusy = isCapturing || isSaving
+    val isRawMode = outputFormat == CameraController.OUTPUT_FORMAT_RAW
+
+    val toolbarTextStyle = TextStyle(
+        fontSize = 32.sp,
+        fontFamily = publicSans,
+        fontWeight = FontWeight.ExtraBold,
+    )
 
     CompositionLocalProvider(LocalDensity provides fixedDensity) {
-    Row(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .width(60.dp)
-                .fillMaxHeight()
-                .background(Color.Black),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxSize()) {
             Column(
-                modifier = Modifier.padding(top = 16.dp)
+                modifier = Modifier
+                    .background(Color.Black)
+                    .width(60.dp)
+                    .fillMaxHeight()
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 if (exposureMode == CameraViewModel.ExposureMode.AUTO) {
+                    // Auto: Exposure Compensation
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
                         modifier = Modifier
-                            .width(60.dp)
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onTap = {
@@ -189,7 +222,6 @@ fun CameraContent(viewModel: CameraViewModel) {
                                     }
                                 )
                             }
-                            .padding(vertical = 0.dp)
                     ) {
                         Icon(
                             painter = painterResource(id = R.drawable.exposure_stroke_rounded),
@@ -201,390 +233,328 @@ fun CameraContent(viewModel: CameraViewModel) {
                                 .rotate(90f)
                         )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
-                        Text(
-                            text = when {
-                                exposureValue == 0f -> "0.0"
-                                exposureValue > 0 -> "+${exposureValue}"
-                                else -> "${exposureValue}"
-                            },
-                            color = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            modifier = Modifier.rotate(90f)
-                        )
+                        Box(
+                            modifier = Modifier .rotateVertically(clockwise = true),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = exposureText,
+                                style = toolbarTextStyle,
+                                color = if (sliderMode == CameraViewModel.SliderMode.EXPOSURE) Color.White.copy(alpha = 1f)
+                                    else Color.White.copy(alpha = 0.7f),
+                            )
+                        }
                     }
                 }
 
-                // Manual mode: Show ISO and Shutter Speed
+                // Manual: ISO and Shutter Speed
                 if (exposureMode == CameraViewModel.ExposureMode.MANUAL) {
-                    // ISO label and value combined
-                    Box(
-                        modifier = Modifier
-                            .width(60.dp)
-                            .height(120.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleIsoPanel()
-                                    },
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.resetIsoToDefault()
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.TopCenter
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = "ISO ${isoValue}",
-                            color = if (sliderMode == CameraViewModel.SliderMode.ISO) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
+                        Box(
                             modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
+                                .rotateVertically(clockwise = true)
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.toggleIsoPanel()
+                                        },
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.resetIsoToDefault()
+                                        }
                                     )
-                                    // Swap width and height for rotated layout
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = 0,
-                                            y = -placeable.height
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                )
-                        )
-                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "$isoValue",
+                                style = toolbarTextStyle,
+                                color = if (sliderMode == CameraViewModel.SliderMode.ISO) Color.White.copy(alpha = 1f)
+                                    else Color.White.copy(alpha = 0.7f),
+                            )
+                        }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .width(60.dp)
-                            .height(77.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleShutterPanel()
-                                    },
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.resetShutterSpeedToDefault()
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Text(
-                            text = formatShutterSpeed(shutterSpeedNs),
-                            color = if (sliderMode == CameraViewModel.SliderMode.SHUTTER) Color.White.copy(alpha = 1f)
-                                else Color.White.copy(alpha = 0.7f),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
+                        Box(
                             modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
+                                .rotateVertically(clockwise = true)
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.toggleShutterPanel()
+                                        },
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.resetShutterSpeedToDefault()
+                                        }
                                     )
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = 0,
-                                            y = -placeable.height
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                )
-                        )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = formatShutterSpeed(shutterSpeedNs),
+                                style = toolbarTextStyle,
+                                color = if (sliderMode == CameraViewModel.SliderMode.SHUTTER) Color.White.copy(alpha = 1f)
+                                    else Color.White.copy(alpha = 0.7f)
+                            )
+                        }
                     }
                 }
-            }
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                val isBusy = isCapturing || isSaving
-
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clickable(enabled = !isBusy) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.toggleExposureMode()
-                        },
-                    contentAlignment = Alignment.Center
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = if (exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
-                        color = Color.White,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 32.sp,
-                            fontFamily = publicSans,
-                            fontWeight = FontWeight.ExtraBold
-                        ),
-                        modifier = Modifier.rotate(90f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Hide format toggle in mono mode (JPEG only)
-                if (!BuildConfig.MONOCHROME_MODE) {
                     Box(
                         modifier = Modifier
-                            .size(60.dp)
+                            .rotateVertically(clockwise = true)
                             .clickable(enabled = !isBusy) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleOutputFormat()
+                                viewModel.toggleExposureMode()
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        val label = viewModel.getFormatName(if (bwMode) -1 else outputFormat)
                         Text(
-                            text = label,
-                            color = Color.White,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            modifier = Modifier.rotate(90f)
+                            text = if (exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
+                            style = toolbarTextStyle,
+                            color = Color.White
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                IconButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.toggleFlash()
-                    },
-                    modifier = Modifier.size(60.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            id = if (flashEnabled) R.drawable.flash_stroke_rounded
-                            else R.drawable.flash_off_stroke_rounded
-                        ),
-                        contentDescription = "Toggle flash",
-                        tint = Color.Unspecified,
+                    Box(
                         modifier = Modifier
-                            .size(32.dp)
-                            .rotate(90f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(0.dp))
-
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.toggleGrid()
-                                },
-                                onLongPress = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.togglePreview()
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            id = if (gridEnabled) R.drawable.grid_stroke_rounded
-                            else R.drawable.grid_off_stroke_rounded
-                        ),
-                        contentDescription = "Toggle grid",
-                        tint = Color.Unspecified,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .rotate(90f)
-                    )
-                }
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .background(Color.Black)
-                .onSizeChanged { size ->
-                    viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
-                }
-        ) {
-            AndroidView(
-                factory = { ctx ->
-                    viewModel.createPreviewView(ctx)
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = if (showFlash) 0f else 1f }
-                    .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            viewModel.onTapToFocus(offset.x, offset.y, size.width.toFloat(), size.height.toFloat())
-                        }
-                    },
-                update = { previewView ->
-                    viewModel.bindCamera(lifecycleOwner, previewView)
-                }
-            )
-
-            if (!showFlash) {
-                crosshairPosition?.let { (x, y) ->
-                    val density = LocalDensity.current
-                    val crosshairSizePx = with(density) { 80.dp.toPx() }
-
-                    Crosshair(
-                        modifier = Modifier.offset(
-                            x = with(density) { (x - crosshairSizePx / 2f).toDp() },
-                            y = with(density) { (y - crosshairSizePx / 2f).toDp() }
-                        )
-                    )
-                }
-
-                if (gridEnabled) {
-                    GridOverlay()
-                }
-            }
-
-            when (sliderMode) {
-                CameraViewModel.SliderMode.EXPOSURE -> {
-                    ExposureSlider(
-                        value = exposureValue,
-                        onValueChange = { viewModel.setExposureValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.ISO -> {
-                    IsoSlider(
-                        value = isoValue,
-                        onValueChange = { viewModel.setIsoValue(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.SHUTTER -> {
-                    ShutterSpeedSlider(
-                        value = shutterSpeedNs,
-                        onValueChange = { viewModel.setShutterSpeed(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    )
-                }
-                CameraViewModel.SliderMode.NONE -> {}
-            }
-
-            // Top toolbar (right side of device, top when held sideways)
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(60.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Toast message at top (appears at start when held sideways)
-                Box(
-                    modifier = Modifier
-                        .width(60.dp)
-                        .height(200.dp)
-                        .padding(top = 16.dp),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    toastMessage?.let { message ->
+                            .rotateVertically(clockwise = true)
+                            .clickable(enabled = !isBusy && !isRawMode) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleColorMode()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            text = message,
-                            color = Color.White,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 32.sp,
-                                fontFamily = publicSans,
-                                fontWeight = FontWeight.ExtraBold
-                            ),
-                            maxLines = 1,
-                            softWrap = false,
+                            text = if (isRawMode) "RGB" else if (colorMode) "BW" else "RGB",
+                            color = if (isRawMode) Color.White.copy(alpha = 0.3f) else Color.White,
+                            style = toolbarTextStyle
+                        )
+                    }
+
+                    if (!BuildConfig.MONOCHROME_MODE) {
+                        Box(
                             modifier = Modifier
-                                .layout { measurable, constraints ->
-                                    val placeable = measurable.measure(
-                                        constraints.copy(
-                                            minWidth = 0,
-                                            maxWidth = Int.MAX_VALUE
-                                        )
+                                .rotateVertically(clockwise = true)
+                                .pointerInput(isBusy) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            if (isBusy) return@detectTapGestures
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.toggleOutputFormat()
+                                        }
                                     )
-                                    layout(placeable.height, placeable.width) {
-                                        placeable.place(
-                                            x = (placeable.height - placeable.width) / 2,
-                                            y = (placeable.width - placeable.height) / 2
-                                        )
-                                    }
-                                }
-                                .graphicsLayer(
-                                    rotationZ = 90f,
-                                    transformOrigin = TransformOrigin(0.5f, 0.5f)
-                                )
-                        )
-
-                        LaunchedEffect(message) {
-                            delay(1500)
-                            viewModel.clearToastMessage()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val label = viewModel.getFormatName(outputFormat, fastMode = isFast)
+                            Text(
+                                text = label,
+                                color = Color.White,
+                                style = toolbarTextStyle
+                            )
                         }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .rotateVertically(clockwise = true)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleFlash()
+                                    },
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleCameraHidden()
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                id = if (flashEnabled) R.drawable.flash_stroke_rounded
+                                else R.drawable.flash_off_stroke_rounded
+                            ),
+                            contentDescription = "Toggle flash",
+                            tint = Color.Unspecified,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .rotateVertically(clockwise = true)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleGrid()
+                                    },
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.togglePreview()
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                id = if (gridEnabled) R.drawable.grid_stroke_rounded
+                                else R.drawable.grid_off_stroke_rounded
+                            ),
+                            contentDescription = "Toggle grid",
+                            tint = Color.Unspecified,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .background(Color.Black)
+                    .onSizeChanged { size ->
+                        viewModel.setScreenDimensions(size.width.toFloat(), size.height.toFloat())
+                    }
+            ) {
+                var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+
+                // Handle lifecycle for camera pause/resume
+                val lifecycleOwner = LocalLifecycleOwner.current
+                androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_PAUSE -> {
+                                viewModel.onPause()
+                            }
+                            Lifecycle.Event.ON_RESUME -> {
+                                textureViewRef?.let { viewModel.onResume(it) }
+                            }
+                            else -> {}
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
                     }
                 }
 
-                // Status at bottom
-                Box(
+                AndroidView(
+                    factory = { ctx ->
+                        viewModel.createPreviewView(ctx).also { textureViewRef = it }
+                    },
                     modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = if (showFlash || cameraHidden) 0f else 1f }
+                        .pointerInput(cameraHidden) {
+                            if (!cameraHidden) {
+                                detectTapGestures { offset ->
+                                    viewModel.onTapToFocus(offset.x, offset.y, size.width.toFloat(), size.height.toFloat())
+                                }
+                            }
+                        },
+                    update = { textureView ->
+                        viewModel.bindCamera(textureView)
+                    }
+                )
+
+                if (!showFlash && !cameraHidden) {
+                    crosshairPosition?.let { (x, y) ->
+                        val density = LocalDensity.current
+                        val crosshairSizePx = with(density) { 80.dp.toPx() }
+
+                        crosshair(
+                            modifier = Modifier.offset(
+                                x = with(density) { (x - crosshairSizePx / 2f).toDp() },
+                                y = with(density) { (y - crosshairSizePx / 2f).toDp() }
+                            )
+                        )
+                    }
+
+                    if (gridEnabled) {
+                        gridOverlay()
+                    }
+                }
+
+                when (sliderMode) {
+                    CameraViewModel.SliderMode.EXPOSURE -> {
+                        exposureSlider(
+                            value = exposureValue,
+                            onValueChange = { viewModel.setExposureValue(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp)
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                        )
+                    }
+                    CameraViewModel.SliderMode.ISO -> {
+                        isoSlider(
+                            value = isoValue,
+                            onValueChange = { viewModel.setIsoValue(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp)
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                        )
+                    }
+                    CameraViewModel.SliderMode.SHUTTER -> {
+                        shutterSpeedSlider(
+                            value = shutterSpeedNs,
+                            onValueChange = { viewModel.setShutterSpeed(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp)
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                        )
+                    }
+                    CameraViewModel.SliderMode.NONE -> {}
+                }
+
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
                         .width(60.dp)
-                        .height(120.dp)
-                        .padding(bottom = 16.dp),
-                    contentAlignment = Alignment.BottomCenter
+                        .padding(vertical = 16.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+
+                    Box() {
+                        toastMessage?.let { message ->
+                            Text(
+                                text = message,
+                                color = Color.White,
+                                style = toolbarTextStyle,
+                                modifier = Modifier.rotateVertically(clockwise = true)
+                            )
+
+                            LaunchedEffect(message) {
+                                delay(2000)
+                                viewModel.clearToastMessage()
+                            }
+                        }
+                    }
+
                     Text(
                         text = when {
                             isCapturing -> "HOLD"
@@ -592,84 +562,59 @@ fun CameraContent(viewModel: CameraViewModel) {
                             else -> "READY"
                         },
                         color = Color.White,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 32.sp,
-                            fontFamily = publicSans,
-                            fontWeight = FontWeight.ExtraBold
-                        ),
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier
-                            .layout { measurable, constraints ->
-                                val placeable = measurable.measure(
-                                    constraints.copy(
-                                        minWidth = 0,
-                                        maxWidth = Int.MAX_VALUE
-                                    )
-                                )
-                                layout(placeable.height, placeable.width) {
-                                    placeable.place(
-                                        x = (placeable.height - placeable.width) / 2,
-                                        y = (placeable.width - placeable.height) / 2
-                                    )
-                                }
-                            }
-                            .graphicsLayer(
-                                rotationZ = 90f,
-                                transformOrigin = TransformOrigin(0.5f, 0.5f)
-                            )
+                        style = toolbarTextStyle,
+                        modifier = Modifier.rotateVertically(clockwise = true)
                     )
                 }
-            }
 
-            LaunchedEffect(showFlash) {
-                if (showFlash) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    delay(50)
-                    viewModel.resetShutterFlash()
+                LaunchedEffect(showFlash) {
+                    if (showFlash) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        delay(50)
+                        viewModel.resetShutterFlash()
+                    }
                 }
-            }
 
-            if (previewEnabled) {
-                capturedImageBitmap?.let { bitmap ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = 24.dp),
-                        contentAlignment = Alignment.BottomStart
-                    ) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Captured photo",
+                if (previewEnabled) {
+                    capturedImageBitmap?.let { bitmap ->
+                        Box(
                             modifier = Modifier
-                                .size(200.dp)
-                                .then(
-                                    if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
-                                ),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                        )
-                    }
+                                .fillMaxSize()
+                                .padding(bottom = 24.dp),
+                            contentAlignment = Alignment.BottomStart
+                        ) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "Captured photo",
+                                modifier = Modifier
+                                    .size(200.dp)
+                                    .then(
+                                        if (!capturedImageIsPortrait) Modifier.rotate(90f) else Modifier
+                                    ),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                            )
+                        }
 
-                    LaunchedEffect(bitmap) {
-                        delay(800)
-                        viewModel.clearCapturedImageUri()
+                        LaunchedEffect(bitmap) {
+                            delay(800)
+                            viewModel.clearCapturedImageUri()
+                        }
                     }
                 }
-            }
 
-            LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
-                if (crosshairPosition != null && !isFocusButtonHeld) {
-                    delay(2000)
-                    viewModel.hideCrosshair()
+                LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
+                    if (crosshairPosition != null && !isFocusButtonHeld) {
+                        delay(2000)
+                        viewModel.hideCrosshair()
+                    }
                 }
             }
         }
     }
-    }
 }
 
 @Composable
-fun Crosshair(modifier: Modifier = Modifier) {
+fun crosshair(modifier: Modifier = Modifier) {
     Canvas(
         modifier = modifier.size(80.dp)
     ) {
@@ -742,7 +687,7 @@ fun Crosshair(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun GridOverlay() {
+fun gridOverlay() {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val strokeWidth = 3f
         val gridColor = Color.White
@@ -779,7 +724,7 @@ fun GridOverlay() {
 }
 
 @Composable
-fun ExposureSlider(
+fun exposureSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -860,7 +805,7 @@ fun ExposureSlider(
 }
 
 @Composable
-fun IsoSlider(
+fun isoSlider(
     value: Int,
     onValueChange: (Int) -> Unit,
     modifier: Modifier = Modifier
@@ -963,7 +908,7 @@ fun formatShutterSpeed(ns: Long): String {
 }
 
 @Composable
-fun ShutterSpeedSlider(
+fun shutterSpeedSlider(
     value: Long,
     onValueChange: (Long) -> Unit,
     modifier: Modifier = Modifier

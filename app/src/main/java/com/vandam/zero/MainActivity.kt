@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.vandam.zero.ui.CameraScreen
+import com.vandam.zero.ui.cameraScreen
 
 class MainActivity : ComponentActivity() {
     private val viewModel: CameraViewModel by viewModels()
@@ -27,7 +27,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    CameraScreen(viewModel)
+                    cameraScreen(viewModel)
                 }
             }
         }
