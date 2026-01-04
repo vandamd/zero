@@ -1216,6 +1216,21 @@ class CameraController(
     fun setFlashEnabled(enabled: Boolean) {
         flashEnabled = enabled
         Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
+        refreshFlashState()
+    }
+
+    private fun refreshFlashState() {
+        val builder = previewRequestBuilder ?: return
+        val session = captureSession ?: return
+
+        applyCommonSettings(builder)
+        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+
+        try {
+            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Error refreshing flash state", e)
+        }
     }
 
     fun setBwMode(enabled: Boolean) {
