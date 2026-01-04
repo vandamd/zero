@@ -26,7 +26,6 @@ import android.widget.Toast
 import com.vandam.zero.BuildConfig
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -37,16 +36,18 @@ import java.util.concurrent.TimeUnit
  * Pure Camera2 implementation for minimal processing capture.
  * Supports JPEG, RAW/DNG, BW mode, and hyperfocal (HF) mode.
  */
-class CameraController(private val context: Context) {
-
+class CameraController(
+    private val context: Context,
+) {
     companion object {
         private const val TAG = "CameraController"
         private const val FILENAME_FORMAT = "'ZERO_'yyyyMMdd_HHmmss"
+
         // Hyperfocal distance: 0.13 diopters = ~7.7m
         // Sharp focus from ~3.8m to infinity
         private const val HYPERFOCAL_DIOPTERS = 0.13f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
-        
+
         // Format constants (matching CameraX for compatibility)
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
@@ -61,10 +62,11 @@ class CameraController(private val context: Context) {
     // Image readers
     private var jpegImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
-    private var zslImageReader: ImageReader? = null  // YUV for fast ZSL capture
-    
+    private var zslImageReader: ImageReader? = null // YUV for fast ZSL capture
+
     // ZSL (Zero Shutter Lag) for fast mode - stores latest YUV image
     private var zslEnabled: Boolean = false
+
     @Volatile private var latestZslImage: Image? = null
     private val zslLock = Object()
 
@@ -119,40 +121,46 @@ class CameraController(private val context: Context) {
     private var onCameraReadyCallback: (() -> Unit)? = null
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
 
-
-
     // Preview request builder (kept for updating settings)
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
     /**
      * Creates a TextureView for camera preview.
      */
-    fun createPreviewView(context: Context): TextureView {
-        return TextureView(context).also { tv ->
+    fun createPreviewView(context: Context): TextureView =
+        TextureView(context).also { tv ->
             textureView = tv
             tv.surfaceTextureListener = surfaceTextureListener
         }
-    }
 
-    private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-            Log.d(TAG, "Surface texture available: ${width}x${height}")
-            openCamera()
-        }
+    private val surfaceTextureListener =
+        object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(
+                surface: SurfaceTexture,
+                width: Int,
+                height: Int,
+            ) {
+                Log.d(TAG, "Surface texture available: ${width}x$height")
+                openCamera()
+            }
 
-        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-            Log.d(TAG, "Surface texture size changed: ${width}x${height}")
-        }
+            override fun onSurfaceTextureSizeChanged(
+                surface: SurfaceTexture,
+                width: Int,
+                height: Int,
+            ) {
+                Log.d(TAG, "Surface texture size changed: ${width}x$height")
+            }
 
-        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-            Log.d(TAG, "Surface texture destroyed")
-            return true
-        }
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                Log.d(TAG, "Surface texture destroyed")
+                return true
+            }
 
-        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-            // Called every frame - no logging needed
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                // Called every frame - no logging needed
+            }
         }
-    }
 
     /**
      * Sets initial output format before camera binding.
@@ -168,7 +176,7 @@ class CameraController(private val context: Context) {
     fun bindCamera(
         textureView: TextureView,
         onFormatsAvailable: (List<Int>) -> Unit = {},
-        onCameraReady: (() -> Unit)? = null
+        onCameraReady: (() -> Unit)? = null,
     ) {
         this.textureView = textureView
         this.onCameraReadyCallback = onCameraReady
@@ -206,10 +214,11 @@ class CameraController(private val context: Context) {
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
         // Find back camera
-        cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-            val chars = cameraManager.getCameraCharacteristics(id)
-            chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        }
+        cameraId =
+            cameraManager.cameraIdList.firstOrNull { id ->
+                val chars = cameraManager.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            }
 
         if (cameraId == null) {
             Log.e(TAG, "No back camera found")
@@ -268,23 +277,28 @@ class CameraController(private val context: Context) {
 
     private fun setupImageReaders(
         chars: CameraCharacteristics,
-        map: android.hardware.camera2.params.StreamConfigurationMap?
+        map: android.hardware.camera2.params.StreamConfigurationMap?,
     ) {
         // JPEG reader - get largest size
         val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)
         val jpegSize = jpegSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
         Log.d(TAG, "JPEG capture size: ${jpegSize.width}x${jpegSize.height}")
 
-        jpegImageReader = ImageReader.newInstance(
-            jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2
-        ).apply {
-            setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage()
-                if (image != null) {
-                    handleJpegCapture(image)
+        jpegImageReader =
+            ImageReader
+                .newInstance(
+                    jpegSize.width,
+                    jpegSize.height,
+                    ImageFormat.JPEG,
+                    2,
+                ).apply {
+                    setOnImageAvailableListener({ reader ->
+                        val image = reader.acquireLatestImage()
+                        if (image != null) {
+                            handleJpegCapture(image)
+                        }
+                    }, backgroundHandler)
                 }
-            }, backgroundHandler)
-        }
 
         // RAW reader if supported
         if (supportsRaw) {
@@ -292,38 +306,48 @@ class CameraController(private val context: Context) {
             val rawSize = rawSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
             Log.d(TAG, "RAW capture size: ${rawSize.width}x${rawSize.height}")
 
-            rawImageReader = ImageReader.newInstance(
-                rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2
-            ).apply {
-                setOnImageAvailableListener({ reader ->
-                    val image = reader.acquireLatestImage()
-                    if (image != null) {
-                        handleRawCapture(image)
+            rawImageReader =
+                ImageReader
+                    .newInstance(
+                        rawSize.width,
+                        rawSize.height,
+                        ImageFormat.RAW_SENSOR,
+                        2,
+                    ).apply {
+                        setOnImageAvailableListener({ reader ->
+                            val image = reader.acquireLatestImage()
+                            if (image != null) {
+                                handleRawCapture(image)
+                            }
+                        }, backgroundHandler)
                     }
-                }, backgroundHandler)
-            }
         }
-        
+
         // ZSL reader - YUV_420_888 is much faster than JPEG for continuous capture
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
         val zslSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: jpegSize
         Log.d(TAG, "ZSL (YUV) capture size: ${zslSize.width}x${zslSize.height}")
-        
-        zslImageReader = ImageReader.newInstance(
-            zslSize.width, zslSize.height, ImageFormat.YUV_420_888, 2
-        ).apply {
-            setOnImageAvailableListener({ reader ->
-                if (zslEnabled) {
-                    synchronized(zslLock) {
-                        latestZslImage?.close()
-                        latestZslImage = reader.acquireLatestImage()
-                    }
-                } else {
-                    // Discard if not in ZSL mode
-                    reader.acquireLatestImage()?.close()
+
+        zslImageReader =
+            ImageReader
+                .newInstance(
+                    zslSize.width,
+                    zslSize.height,
+                    ImageFormat.YUV_420_888,
+                    2,
+                ).apply {
+                    setOnImageAvailableListener({ reader ->
+                        if (zslEnabled) {
+                            synchronized(zslLock) {
+                                latestZslImage?.close()
+                                latestZslImage = reader.acquireLatestImage()
+                            }
+                        } else {
+                            // Discard if not in ZSL mode
+                            reader.acquireLatestImage()?.close()
+                        }
+                    }, backgroundHandler)
                 }
-            }, backgroundHandler)
-        }
 
         // Preview size - find appropriate size for TextureView
         val displaySizes = map?.getOutputSizes(SurfaceTexture::class.java)
@@ -331,41 +355,51 @@ class CameraController(private val context: Context) {
         Log.d(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
     }
 
-    private fun chooseOptimalPreviewSize(choices: Array<Size>?, targetWidth: Int, targetHeight: Int): Size {
+    private fun chooseOptimalPreviewSize(
+        choices: Array<Size>?,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): Size {
         if (choices == null || choices.isEmpty()) return Size(1920, 1080)
 
         // Prefer 4:3 aspect ratio for preview to match sensor
         val targetRatio = 4.0 / 3.0
         val tolerance = 0.1
 
-        val suitable = choices.filter { size ->
-            val ratio = size.width.toDouble() / size.height.toDouble()
-            Math.abs(ratio - targetRatio) < tolerance && size.width <= 1920
-        }.sortedByDescending { it.width * it.height }
+        val suitable =
+            choices
+                .filter { size ->
+                    val ratio = size.width.toDouble() / size.height.toDouble()
+                    Math.abs(ratio - targetRatio) < tolerance && size.width <= 1920
+                }.sortedByDescending { it.width * it.height }
 
         return suitable.firstOrNull() ?: choices.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
     }
 
-    private val stateCallback = object : CameraDevice.StateCallback() {
-        override fun onOpened(camera: CameraDevice) {
-            cameraOpenCloseLock.release()
-            cameraDevice = camera
-            createCaptureSession()
-        }
+    private val stateCallback =
+        object : CameraDevice.StateCallback() {
+            override fun onOpened(camera: CameraDevice) {
+                cameraOpenCloseLock.release()
+                cameraDevice = camera
+                createCaptureSession()
+            }
 
-        override fun onDisconnected(camera: CameraDevice) {
-            cameraOpenCloseLock.release()
-            camera.close()
-            cameraDevice = null
-        }
+            override fun onDisconnected(camera: CameraDevice) {
+                cameraOpenCloseLock.release()
+                camera.close()
+                cameraDevice = null
+            }
 
-        override fun onError(camera: CameraDevice, error: Int) {
-            cameraOpenCloseLock.release()
-            camera.close()
-            cameraDevice = null
-            Log.e(TAG, "Camera error: $error")
+            override fun onError(
+                camera: CameraDevice,
+                error: Int,
+            ) {
+                cameraOpenCloseLock.release()
+                camera.close()
+                cameraDevice = null
+                Log.e(TAG, "Camera error: $error")
+            }
         }
-    }
 
     private fun createCaptureSession() {
         val camera = cameraDevice ?: return
@@ -379,7 +413,7 @@ class CameraController(private val context: Context) {
         surfaces.add(previewSurface!!)
         jpegImageReader?.surface?.let { surfaces.add(it) }
         rawImageReader?.surface?.let { surfaces.add(it) }
-        
+
         // Only add ZSL surface in fast mode - it breaks JPEG colors on quad bayer sensors
         if (fastMode) {
             zslImageReader?.surface?.let { surfaces.add(it) }
@@ -389,35 +423,37 @@ class CameraController(private val context: Context) {
         }
 
         try {
-            val stateCallback = object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    if (cameraDevice == null) return
-                    captureSession = session
-                    startPreview()
+            val stateCallback =
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (cameraDevice == null) return
+                        captureSession = session
+                        startPreview()
 
-                    // Apply grayscale filter to preview if needed
-                    applyGrayscaleFilterToPreview()
+                        // Apply grayscale filter to preview if needed
+                        applyGrayscaleFilterToPreview()
 
-                    coroutineScope.launch(Dispatchers.Main) {
-                        onCameraReadyCallback?.invoke()
+                        coroutineScope.launch(Dispatchers.Main) {
+                            onCameraReadyCallback?.invoke()
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e(TAG, "Capture session configuration failed")
+                        postToast("Camera configuration failed")
                     }
                 }
 
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.e(TAG, "Capture session configuration failed")
-                    postToast("Camera configuration failed")
-                }
-            }
-            
             // Use modern API for Android P+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val outputConfigs = surfaces.map { OutputConfiguration(it) }
-                val sessionConfig = SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    outputConfigs,
-                    Executors.newSingleThreadExecutor(),
-                    stateCallback
-                )
+                val sessionConfig =
+                    SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        outputConfigs,
+                        Executors.newSingleThreadExecutor(),
+                        stateCallback,
+                    )
                 camera.createCaptureSession(sessionConfig)
             } else {
                 @Suppress("DEPRECATION")
@@ -436,19 +472,21 @@ class CameraController(private val context: Context) {
         try {
             if (fastMode && zslImageReader != null) {
                 // Fast mode: continuous YUV capture for instant shutter
-                previewRequestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG).apply {
-                    addTarget(surface)
-                    addTarget(zslImageReader!!.surface)
-                    applyCommonSettings(this)
-                }
+                previewRequestBuilder =
+                    camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG).apply {
+                        addTarget(surface)
+                        addTarget(zslImageReader!!.surface)
+                        applyCommonSettings(this)
+                    }
                 zslEnabled = true
                 Log.d(TAG, "Preview started with ZSL [fast mode]")
             } else {
                 // Normal mode: simple preview
-                previewRequestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(surface)
-                    applyCommonSettings(this)
-                }
+                previewRequestBuilder =
+                    camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                        addTarget(surface)
+                        applyCommonSettings(this)
+                    }
                 zslEnabled = false
                 Log.d(TAG, "Preview started [normal mode]")
             }
@@ -493,11 +531,11 @@ class CameraController(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
         }
-        
+
         // Color processing
         builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
-        
+
         // Disable face detection
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
     }
@@ -533,18 +571,20 @@ class CameraController(private val context: Context) {
         onCaptureStarted: () -> Unit = {},
         onPreviewReady: (Bitmap?) -> Unit = {},
         onComplete: (Uri?) -> Unit = {},
-        onBenchmark: (shutterMs: Long, saveMs: Long) -> Unit = { _, _ -> }
+        onBenchmark: (shutterMs: Long, saveMs: Long) -> Unit = { _, _ -> },
     ) {
-        val camera = cameraDevice ?: run {
-            Log.e(TAG, "takePhoto: camera not ready")
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            Log.e(TAG, "takePhoto: session not ready")
-            onComplete(null)
-            return
-        }
+        val camera =
+            cameraDevice ?: run {
+                Log.e(TAG, "takePhoto: camera not ready")
+                onComplete(null)
+                return
+            }
+        val session =
+            captureSession ?: run {
+                Log.e(TAG, "takePhoto: session not ready")
+                onComplete(null)
+                return
+            }
 
         synchronized(captureLock) {
             pendingCaptureCount++
@@ -558,7 +598,7 @@ class CameraController(private val context: Context) {
         onBenchmarkCallback = onBenchmark
 
         captureStartTimestamp = System.currentTimeMillis()
-        
+
         // Fast mode uses ZSL/YUV path for instant capture
         // Normal mode uses vanilla JPEG (correct colors without ZSL surface in session)
         if (currentOutputFormat == OUTPUT_FORMAT_JPEG) {
@@ -574,16 +614,17 @@ class CameraController(private val context: Context) {
         val targetSurface = rawImageReader!!.surface
 
         try {
-            val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                addTarget(targetSurface)
-                applyCommonSettings(this)
+            val captureBuilder =
+                camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                    addTarget(targetSurface)
+                    applyCommonSettings(this)
 
-                // Flash
-                if (flashEnabled) {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                    // Flash
+                    if (flashEnabled) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                    }
                 }
-            }
 
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
@@ -592,7 +633,7 @@ class CameraController(private val context: Context) {
             onComplete(null)
         }
     }
-    
+
     /**
      * Vanilla JPEG capture - uses camera defaults with NO custom processing settings.
      * This should work correctly on quad bayer sensors that have issues with custom settings.
@@ -601,35 +642,36 @@ class CameraController(private val context: Context) {
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
         val jpegSurface = jpegImageReader?.surface ?: return
-        
+
         try {
-            val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                addTarget(jpegSurface)
-                
-                // JPEG orientation
-                set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
-                
-                // Flash if enabled
-                if (flashEnabled) {
-                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+            val captureBuilder =
+                camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                    addTarget(jpegSurface)
+
+                    // JPEG orientation
+                    set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
+
+                    // Flash if enabled
+                    if (flashEnabled) {
+                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                    }
+
+                    // Minimal processing - disable ISP enhancements for film-like output
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                    set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
+                    set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
+                    set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                    set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
+                    }
+
+                    // Color processing
+                    set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 }
-                
-                // Minimal processing - disable ISP enhancements for film-like output
-                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
-                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
-                set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
-                set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-                set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
-                }
-                
-                // Color processing
-                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
-            }
-            
+
             Log.d(TAG, "Taking JPEG photo")
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
@@ -639,42 +681,43 @@ class CameraController(private val context: Context) {
         }
     }
 
-    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
-        override fun onCaptureStarted(
-            session: CameraCaptureSession,
-            request: CaptureRequest,
-            timestamp: Long,
-            frameNumber: Long
-        ) {
-            shutterTimestamp = System.currentTimeMillis()
-            coroutineScope.launch(Dispatchers.Main) {
-                onCaptureStartedCallback?.invoke()
+    private val captureCallback =
+        object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureStarted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                timestamp: Long,
+                frameNumber: Long,
+            ) {
+                shutterTimestamp = System.currentTimeMillis()
+                coroutineScope.launch(Dispatchers.Main) {
+                    onCaptureStartedCallback?.invoke()
+                }
+            }
+
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                Log.d(TAG, "onCaptureCompleted")
+                // Store for DNG metadata
+                lastCaptureResult = result
+            }
+
+            override fun onCaptureFailed(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                failure: CaptureFailure,
+            ) {
+                Log.e(TAG, "Capture failed: ${failure.reason}")
+                synchronized(captureLock) { pendingCaptureCount-- }
+                coroutineScope.launch(Dispatchers.Main) {
+                    onPreviewReadyCallback?.invoke(null)
+                    onCompleteCallback?.invoke(null)
+                }
             }
         }
-
-        override fun onCaptureCompleted(
-            session: CameraCaptureSession,
-            request: CaptureRequest,
-            result: TotalCaptureResult
-        ) {
-            Log.d(TAG, "onCaptureCompleted")
-            // Store for DNG metadata
-            lastCaptureResult = result
-        }
-
-        override fun onCaptureFailed(
-            session: CameraCaptureSession,
-            request: CaptureRequest,
-            failure: CaptureFailure
-        ) {
-            Log.e(TAG, "Capture failed: ${failure.reason}")
-            synchronized(captureLock) { pendingCaptureCount-- }
-            coroutineScope.launch(Dispatchers.Main) {
-                onPreviewReadyCallback?.invoke(null)
-                onCompleteCallback?.invoke(null)
-            }
-        }
-    }
 
     // Store capture result for DNG metadata
     private var lastCaptureResult: TotalCaptureResult? = null
@@ -685,22 +728,23 @@ class CameraController(private val context: Context) {
      */
     private fun takeZslPhoto() {
         val image: Image?
-        
+
         synchronized(zslLock) {
             image = latestZslImage
             latestZslImage = null // Take ownership
         }
-        
+
         if (image == null) {
             Log.w(TAG, "ZSL: No image available in buffer, waiting...")
             // Wait a bit for buffer to fill, then retry
             coroutineScope.launch(Dispatchers.IO) {
                 delay(100)
-                val retryImage = synchronized(zslLock) { 
-                    val img = latestZslImage
-                    latestZslImage = null
-                    img
-                }
+                val retryImage =
+                    synchronized(zslLock) {
+                        val img = latestZslImage
+                        latestZslImage = null
+                        img
+                    }
                 if (retryImage != null) {
                     processZslCapture(retryImage)
                 } else {
@@ -713,26 +757,26 @@ class CameraController(private val context: Context) {
             }
             return
         }
-        
+
         processZslCapture(image)
     }
-    
+
     private fun processZslCapture(image: Image) {
         shutterTimestamp = System.currentTimeMillis()
         val bufferGrabLatency = shutterTimestamp - captureStartTimestamp
-        
+
         // Immediately signal capture started
         coroutineScope.launch(Dispatchers.Main) {
             onCaptureStartedCallback?.invoke()
         }
-        
+
         coroutineScope.launch(Dispatchers.IO) {
             // Convert YUV to JPEG
             val conversionStart = System.currentTimeMillis()
             val bytes = yuvToJpeg(image)
             val conversionTime = System.currentTimeMillis() - conversionStart
             image.close()
-            
+
             if (bytes == null) {
                 Log.e(TAG, "ZSL: Failed to convert YUV to JPEG")
                 synchronized(captureLock) { pendingCaptureCount-- }
@@ -741,7 +785,7 @@ class CameraController(private val context: Context) {
                 }
                 return@launch
             }
-            
+
             // Extract preview bitmap
             val previewBitmap = extractPreviewBitmap(bytes)
 
@@ -756,7 +800,10 @@ class CameraController(private val context: Context) {
 
             // Calculate benchmark
             val totalLatency = System.currentTimeMillis() - captureStartTimestamp
-            Log.d(TAG, "Benchmark [HF]: shutter=${bufferGrabLatency}ms, convert=${conversionTime}ms, save=${saveTime}ms, total=${totalLatency}ms")
+            Log.d(
+                TAG,
+                "Benchmark [HF]: shutter=${bufferGrabLatency}ms, convert=${conversionTime}ms, save=${saveTime}ms, total=${totalLatency}ms",
+            )
 
             synchronized(captureLock) {
                 pendingCaptureCount--
@@ -768,34 +815,34 @@ class CameraController(private val context: Context) {
             }
         }
     }
-    
+
     /**
      * Convert YUV_420_888 image to JPEG bytes.
      */
-    private fun yuvToJpeg(image: Image): ByteArray? {
-        return try {
+    private fun yuvToJpeg(image: Image): ByteArray? =
+        try {
             val yuvBytes = yuv420ToNv21(image)
-            val yuvImage = android.graphics.YuvImage(
-                yuvBytes,
-                android.graphics.ImageFormat.NV21,
-                image.width,
-                image.height,
-                null
-            )
-            
+            val yuvImage =
+                android.graphics.YuvImage(
+                    yuvBytes,
+                    android.graphics.ImageFormat.NV21,
+                    image.width,
+                    image.height,
+                    null,
+                )
+
             val outputStream = ByteArrayOutputStream()
             yuvImage.compressToJpeg(
                 android.graphics.Rect(0, 0, image.width, image.height),
                 95,
-                outputStream
+                outputStream,
             )
             outputStream.toByteArray()
         } catch (e: Exception) {
             Log.e(TAG, "YUV to JPEG conversion failed", e)
             null
         }
-    }
-    
+
     /**
      * Convert YUV_420_888 to NV21 format for YuvImage.
      */
@@ -805,15 +852,15 @@ class CameraController(private val context: Context) {
         val ySize = width * height
         val uvSize = width * height / 2
         val nv21 = ByteArray(ySize + uvSize)
-        
+
         val yBuffer = image.planes[0].buffer
         val uBuffer = image.planes[1].buffer
         val vBuffer = image.planes[2].buffer
-        
+
         val yRowStride = image.planes[0].rowStride
         val uvRowStride = image.planes[1].rowStride
         val uvPixelStride = image.planes[1].pixelStride
-        
+
         // Copy Y plane
         var pos = 0
         if (yRowStride == width) {
@@ -826,11 +873,11 @@ class CameraController(private val context: Context) {
                 pos += width
             }
         }
-        
+
         // Copy UV planes (interleaved as VU for NV21)
         val uvHeight = height / 2
         val uvWidth = width / 2
-        
+
         // Manual interleaving - V then U for each pixel pair
         for (row in 0 until uvHeight) {
             for (col in 0 until uvWidth) {
@@ -839,7 +886,7 @@ class CameraController(private val context: Context) {
                 nv21[ySize + row * width + col * 2 + 1] = uBuffer.get(uvIndex)
             }
         }
-        
+
         return nv21
     }
 
@@ -858,11 +905,12 @@ class CameraController(private val context: Context) {
             }
 
             // Apply grayscale if BW mode, otherwise re-encode to fix color
-            val finalBytes = if (bwMode || monoFlavor) {
-                convertToGrayscaleJpeg(bytes)
-            } else {
-                reencodeJpeg(bytes)
-            }
+            val finalBytes =
+                if (bwMode || monoFlavor) {
+                    convertToGrayscaleJpeg(bytes)
+                } else {
+                    reencodeJpeg(bytes)
+                }
 
             // Save to storage
             val uri = saveJpegToStorage(finalBytes)
@@ -899,7 +947,7 @@ class CameraController(private val context: Context) {
                 delay(10)
                 attempts++
             }
-            
+
             if (lastCaptureResult == null) {
                 Log.e(TAG, "Timeout waiting for capture result for DNG")
                 image.close()
@@ -933,17 +981,19 @@ class CameraController(private val context: Context) {
     }
 
     private fun extractPreviewBitmap(jpegBytes: ByteArray): Bitmap? {
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
+        val options =
+            BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
         BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, options)
 
         val targetSize = 400
         val sampleSize = maxOf(1, minOf(options.outWidth, options.outHeight) / targetSize)
 
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-        }
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+            }
 
         val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions) ?: return null
 
@@ -957,11 +1007,13 @@ class CameraController(private val context: Context) {
 
     private fun convertToGrayscaleJpeg(jpegBytes: ByteArray): ByteArray {
         return try {
-            val decodeOptions = BitmapFactory.Options().apply {
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-            val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
-                ?: return jpegBytes
+            val decodeOptions =
+                BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+            val original =
+                BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
+                    ?: return jpegBytes
 
             val grayscale = GrayscaleConverter.toGrayscale(original, recycleSource = true)
 
@@ -986,11 +1038,13 @@ class CameraController(private val context: Context) {
      */
     private fun reencodeJpeg(jpegBytes: ByteArray): ByteArray {
         return try {
-            val decodeOptions = BitmapFactory.Options().apply {
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-            val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
-                ?: return jpegBytes
+            val decodeOptions =
+                BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+            val bitmap =
+                BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
+                    ?: return jpegBytes
 
             val outputStream = ByteArrayOutputStream()
             val success = bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
@@ -1008,21 +1062,24 @@ class CameraController(private val context: Context) {
     }
 
     private fun saveJpegToStorage(jpegBytes: ByteArray): Uri? {
-        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis()) + ".jpg"
+        val name =
+            SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+                .format(System.currentTimeMillis()) + ".jpg"
 
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
+        val contentValues =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
+                }
             }
-        }
 
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        )
+        val uri =
+            context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues,
+            )
 
         if (uri != null) {
             context.contentResolver.openOutputStream(uri)?.use { outputStream ->
@@ -1034,31 +1091,36 @@ class CameraController(private val context: Context) {
     }
 
     private fun saveDngToStorage(image: Image): Uri? {
-        val chars = cameraCharacteristics ?: run {
-            Log.e(TAG, "saveDngToStorage: cameraCharacteristics is null")
-            return null
-        }
-        
-        val captureResult = lastCaptureResult ?: run {
-            Log.e(TAG, "saveDngToStorage: lastCaptureResult is null")
-            return null
-        }
-
-        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis()) + ".dng"
-
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
-            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
+        val chars =
+            cameraCharacteristics ?: run {
+                Log.e(TAG, "saveDngToStorage: cameraCharacteristics is null")
+                return null
             }
-        }
 
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        )
+        val captureResult =
+            lastCaptureResult ?: run {
+                Log.e(TAG, "saveDngToStorage: lastCaptureResult is null")
+                return null
+            }
+
+        val name =
+            SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+                .format(System.currentTimeMillis()) + ".dng"
+
+        val contentValues =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
+                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Zero")
+                }
+            }
+
+        val uri =
+            context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues,
+            )
 
         if (uri != null) {
             try {
@@ -1086,13 +1148,14 @@ class CameraController(private val context: Context) {
 
     private fun getJpegOrientation(): Int {
         // Convert device rotation to degrees
-        val deviceDegrees = when (currentRotation) {
-            Surface.ROTATION_0 -> 0
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
+        val deviceDegrees =
+            when (currentRotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
 
         // For back camera: rotation = (sensorOrientation - deviceDegrees + 360) % 360
         // This compensates for how the sensor is mounted
@@ -1134,7 +1197,7 @@ class CameraController(private val context: Context) {
 
     fun setFastMode(enabled: Boolean) {
         if (fastMode == enabled) return
-        
+
         // Clear ZSL buffer when disabling
         if (!enabled) {
             synchronized(zslLock) {
@@ -1143,10 +1206,10 @@ class CameraController(private val context: Context) {
             }
             zslEnabled = false
         }
-        
+
         fastMode = enabled
         Log.d(TAG, "Fast (hyperfocal) mode set to: $enabled - recreating session")
-        
+
         // Close current session and recreate with/without ZSL surface
         captureSession?.close()
         captureSession = null
@@ -1165,14 +1228,18 @@ class CameraController(private val context: Context) {
         Log.d(TAG, "Output format changed to: ${getFormatName(format)}")
     }
 
-    fun setAutoExposure(enabled: Boolean, ev: Float? = null) {
+    fun setAutoExposure(
+        enabled: Boolean,
+        ev: Float? = null,
+    ) {
         autoExposure = enabled
         if (ev != null) {
             val step = exposureCompensationStep
-            exposureCompensation = (ev / step).toInt().coerceIn(
-                exposureCompensationRange?.lower ?: -12,
-                exposureCompensationRange?.upper ?: 12
-            )
+            exposureCompensation =
+                (ev / step).toInt().coerceIn(
+                    exposureCompensationRange?.lower ?: -12,
+                    exposureCompensationRange?.upper ?: 12,
+                )
         }
         Log.d(TAG, "Auto exposure: $enabled, EC index: $exposureCompensation")
         updatePreview()
@@ -1180,26 +1247,32 @@ class CameraController(private val context: Context) {
 
     fun setExposureCompensation(ev: Float) {
         val step = exposureCompensationStep
-        exposureCompensation = (ev / step).toInt().coerceIn(
-            exposureCompensationRange?.lower ?: -12,
-            exposureCompensationRange?.upper ?: 12
-        )
+        exposureCompensation =
+            (ev / step).toInt().coerceIn(
+                exposureCompensationRange?.lower ?: -12,
+                exposureCompensationRange?.upper ?: 12,
+            )
         Log.d(TAG, "Exposure compensation: $ev EV (index: $exposureCompensation)")
         if (autoExposure) {
             updatePreview()
         }
     }
 
-    fun setManualExposure(iso: Int, exposureTimeNs: Long) {
+    fun setManualExposure(
+        iso: Int,
+        exposureTimeNs: Long,
+    ) {
         autoExposure = false
-        manualIso = iso.coerceIn(
-            isoRange?.lower ?: 100,
-            isoRange?.upper ?: 3200
-        )
-        manualExposureTimeNs = exposureTimeNs.coerceIn(
-            exposureTimeRange?.lower ?: 1000000L,
-            exposureTimeRange?.upper ?: 1000000000L
-        )
+        manualIso =
+            iso.coerceIn(
+                isoRange?.lower ?: 100,
+                isoRange?.upper ?: 3200,
+            )
+        manualExposureTimeNs =
+            exposureTimeNs.coerceIn(
+                exposureTimeRange?.lower ?: 1000000L,
+                exposureTimeRange?.upper ?: 1000000000L,
+            )
         Log.d(TAG, "Manual exposure: ISO=$manualIso, shutter=${manualExposureTimeNs}ns")
         updatePreview()
     }
@@ -1207,7 +1280,12 @@ class CameraController(private val context: Context) {
     /**
      * Tap to focus at normalized coordinates.
      */
-    fun onTapToFocus(x: Float, y: Float, width: Float, height: Float) {
+    fun onTapToFocus(
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+    ) {
         if (fastMode) {
             Log.d(TAG, "Tap to focus ignored in hyperfocal mode")
             return
@@ -1240,14 +1318,17 @@ class CameraController(private val context: Context) {
                 sensorX = (normalizedY * sensorRect.width()).toInt()
                 sensorY = ((1 - normalizedX) * sensorRect.height()).toInt()
             }
+
             270 -> {
                 sensorX = ((1 - normalizedY) * sensorRect.width()).toInt()
                 sensorY = (normalizedX * sensorRect.height()).toInt()
             }
+
             180 -> {
                 sensorX = ((1 - normalizedX) * sensorRect.width()).toInt()
                 sensorY = ((1 - normalizedY) * sensorRect.height()).toInt()
             }
+
             else -> {
                 sensorX = (normalizedX * sensorRect.width()).toInt()
                 sensorY = (normalizedY * sensorRect.height()).toInt()
@@ -1259,10 +1340,11 @@ class CameraController(private val context: Context) {
         val right = (sensorX + focusSize).coerceIn(1, sensorRect.width())
         val bottom = (sensorY + focusSize).coerceIn(1, sensorRect.height())
 
-        val focusRegion = MeteringRectangle(
-            android.graphics.Rect(left, top, right, bottom),
-            MeteringRectangle.METERING_WEIGHT_MAX
-        )
+        val focusRegion =
+            MeteringRectangle(
+                android.graphics.Rect(left, top, right, bottom),
+                MeteringRectangle.METERING_WEIGHT_MAX,
+            )
 
         try {
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(focusRegion))
@@ -1327,21 +1409,42 @@ class CameraController(private val context: Context) {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val colorMatrix = android.graphics.ColorMatrix(floatArrayOf(
-                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
-                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
-                    GrayscaleConverter.R_WEIGHT, GrayscaleConverter.G_WEIGHT, GrayscaleConverter.B_WEIGHT, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val effect = android.graphics.RenderEffect.createColorFilterEffect(
-                    android.graphics.ColorMatrixColorFilter(colorMatrix)
-                )
+                val colorMatrix =
+                    android.graphics.ColorMatrix(
+                        floatArrayOf(
+                            GrayscaleConverter.R_WEIGHT,
+                            GrayscaleConverter.G_WEIGHT,
+                            GrayscaleConverter.B_WEIGHT,
+                            0f,
+                            0f,
+                            GrayscaleConverter.R_WEIGHT,
+                            GrayscaleConverter.G_WEIGHT,
+                            GrayscaleConverter.B_WEIGHT,
+                            0f,
+                            0f,
+                            GrayscaleConverter.R_WEIGHT,
+                            GrayscaleConverter.G_WEIGHT,
+                            GrayscaleConverter.B_WEIGHT,
+                            0f,
+                            0f,
+                            0f,
+                            0f,
+                            0f,
+                            1f,
+                            0f,
+                        ),
+                    )
+                val effect =
+                    android.graphics.RenderEffect.createColorFilterEffect(
+                        android.graphics.ColorMatrixColorFilter(colorMatrix),
+                    )
                 tv.setRenderEffect(effect)
                 Log.d(TAG, "Applied grayscale RenderEffect to preview")
             } else {
-                val paint = android.graphics.Paint().apply {
-                    colorFilter = GrayscaleConverter.getColorFilter()
-                }
+                val paint =
+                    android.graphics.Paint().apply {
+                        colorFilter = GrayscaleConverter.getColorFilter()
+                    }
                 tv.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
                 Log.d(TAG, "Applied grayscale filter to preview (legacy)")
             }
@@ -1361,14 +1464,14 @@ class CameraController(private val context: Context) {
     fun shutdown() {
         try {
             cameraOpenCloseLock.acquire()
-            
+
             // Clean up ZSL
             synchronized(zslLock) {
                 latestZslImage?.close()
                 latestZslImage = null
             }
             zslEnabled = false
-            
+
             captureSession?.close()
             captureSession = null
             cameraDevice?.close()
@@ -1405,11 +1508,10 @@ class CameraController(private val context: Context) {
         }
     }
 
-    private fun getFormatName(format: Int): String {
-        return when (format) {
+    private fun getFormatName(format: Int): String =
+        when (format) {
             OUTPUT_FORMAT_JPEG -> "JPEG"
             OUTPUT_FORMAT_RAW -> "RAW"
             else -> "UNKNOWN"
         }
-    }
 }

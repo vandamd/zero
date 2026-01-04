@@ -112,11 +112,15 @@ class CameraViewModel : ViewModel() {
     private var currentRotation: Int = Surface.ROTATION_0
 
     enum class ExposureMode {
-        AUTO, MANUAL
+        AUTO,
+        MANUAL,
     }
 
     enum class SliderMode {
-        NONE, EXPOSURE, ISO, SHUTTER
+        NONE,
+        EXPOSURE,
+        ISO,
+        SHUTTER,
     }
 
     fun resetShutterFlash() {
@@ -142,26 +146,31 @@ class CameraViewModel : ViewModel() {
                 return thumbnail
             }
         }
-        
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
+
+        val options =
+            BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             BitmapFactory.decodeStream(inputStream, null, options)
         }
-        
+
         val targetSize = 400
         val sampleSize = maxOf(1, minOf(options.outWidth, options.outHeight) / targetSize)
-        
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-        }
+
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+            }
         return context.contentResolver.openInputStream(uri)?.use { inputStream ->
             BitmapFactory.decodeStream(inputStream, null, decodeOptions)
         }
     }
 
-    fun showCrosshair(x: Float, y: Float) {
+    fun showCrosshair(
+        x: Float,
+        y: Float,
+    ) {
         _crosshairPosition.value = Pair(x, y)
     }
 
@@ -169,7 +178,10 @@ class CameraViewModel : ViewModel() {
         _crosshairPosition.value = null
     }
 
-    fun setScreenDimensions(width: Float, height: Float) {
+    fun setScreenDimensions(
+        width: Float,
+        height: Float,
+    ) {
         screenWidth = width
         screenHeight = height
     }
@@ -205,35 +217,39 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleExposurePanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.EXPOSURE) {
-            SliderMode.NONE
-        } else {
-            SliderMode.EXPOSURE
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.EXPOSURE) {
+                SliderMode.NONE
+            } else {
+                SliderMode.EXPOSURE
+            }
     }
 
     fun toggleIsoPanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.ISO) {
-            SliderMode.NONE
-        } else {
-            SliderMode.ISO
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.ISO) {
+                SliderMode.NONE
+            } else {
+                SliderMode.ISO
+            }
     }
 
     fun toggleShutterPanel() {
-        _sliderMode.value = if (_sliderMode.value == SliderMode.SHUTTER) {
-            SliderMode.NONE
-        } else {
-            SliderMode.SHUTTER
-        }
+        _sliderMode.value =
+            if (_sliderMode.value == SliderMode.SHUTTER) {
+                SliderMode.NONE
+            } else {
+                SliderMode.SHUTTER
+            }
     }
 
     fun toggleExposureMode() {
-        val newMode = if (_exposureMode.value == ExposureMode.AUTO) {
-            ExposureMode.MANUAL
-        } else {
-            ExposureMode.AUTO
-        }
+        val newMode =
+            if (_exposureMode.value == ExposureMode.AUTO) {
+                ExposureMode.MANUAL
+            } else {
+                ExposureMode.AUTO
+            }
         setExposureMode(newMode)
     }
 
@@ -335,13 +351,13 @@ class CameraViewModel : ViewModel() {
 
     fun bindCamera(textureView: TextureView) {
         val context = appContext ?: return
-        
+
         if (cameraController == null) {
             cameraController = CameraController(context)
         }
-        
+
         setupOrientationListener(context)
-        
+
         if (_isFastMode.value) {
             _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
         }
@@ -351,7 +367,7 @@ class CameraViewModel : ViewModel() {
         } else {
             _bwMode.value = false
         }
-        
+
         cameraController?.setInitialOutputFormat(_outputFormat.value)
         cameraController?.setFlashEnabled(_flashEnabled.value)
         cameraController?.setBwMode(_bwMode.value)
@@ -361,16 +377,17 @@ class CameraViewModel : ViewModel() {
             textureView,
             onFormatsAvailable = { formats ->
                 // Order: JPG, HF, RAW (color mode is separate)
-                val orderedFormats = if (formats.contains(CameraController.OUTPUT_FORMAT_JPEG)) {
-                    val hasRaw = formats.contains(CameraController.OUTPUT_FORMAT_RAW)
-                    if (hasRaw) {
-                        listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode, CameraController.OUTPUT_FORMAT_RAW)
+                val orderedFormats =
+                    if (formats.contains(CameraController.OUTPUT_FORMAT_JPEG)) {
+                        val hasRaw = formats.contains(CameraController.OUTPUT_FORMAT_RAW)
+                        if (hasRaw) {
+                            listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode, CameraController.OUTPUT_FORMAT_RAW)
+                        } else {
+                            listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode)
+                        }
                     } else {
-                        listOf(CameraController.OUTPUT_FORMAT_JPEG, hfFormatCode)
+                        formats
                     }
-                } else {
-                    formats
-                }
                 _availableFormats.value = orderedFormats
             },
             onCameraReady = {
@@ -379,33 +396,35 @@ class CameraViewModel : ViewModel() {
                 } else {
                     cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
                 }
-            }
+            },
         )
     }
 
     private fun setupOrientationListener(context: Context) {
         orientationEventListener?.disable()
 
-        orientationEventListener = object : OrientationEventListener(context) {
-            override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) {
-                    return
-                }
+        orientationEventListener =
+            object : OrientationEventListener(context) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) {
+                        return
+                    }
 
-                val rotation = when (orientation) {
-                    in 45..134 -> Surface.ROTATION_270
-                    in 135..224 -> Surface.ROTATION_180
-                    in 225..314 -> Surface.ROTATION_90
-                    else -> Surface.ROTATION_0
-                }
+                    val rotation =
+                        when (orientation) {
+                            in 45..134 -> Surface.ROTATION_270
+                            in 135..224 -> Surface.ROTATION_180
+                            in 225..314 -> Surface.ROTATION_90
+                            else -> Surface.ROTATION_0
+                        }
 
-                if (rotation != currentRotation) {
-                    currentRotation = rotation
-                    cameraController?.setRotation(rotation)
-                    Log.d("CameraViewModel", "Rotation updated to: $rotation (orientation: ${orientation}°)")
+                    if (rotation != currentRotation) {
+                        currentRotation = rotation
+                        cameraController?.setRotation(rotation)
+                        Log.d("CameraViewModel", "Rotation updated to: $rotation (orientation: $orientation°)")
+                    }
                 }
             }
-        }
 
         orientationEventListener?.enable()
     }
@@ -417,10 +436,11 @@ class CameraViewModel : ViewModel() {
         val formats = _availableFormats.value
         if (formats.isEmpty()) return
 
-        val currentOption = when {
-            _isFastMode.value -> hfFormatCode
-            else -> _outputFormat.value
-        }
+        val currentOption =
+            when {
+                _isFastMode.value -> hfFormatCode
+                else -> _outputFormat.value
+            }
         val currentIndex = formats.indexOf(currentOption).takeIf { it >= 0 } ?: 0
         val nextIndex = (currentIndex + 1) % formats.size
         val newOption = formats[nextIndex]
@@ -439,6 +459,7 @@ class CameraViewModel : ViewModel() {
                 cameraController?.setBwMode(_bwMode.value)
                 cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_JPEG)
             }
+
             CameraController.OUTPUT_FORMAT_RAW -> {
                 if (_isFastMode.value) {
                     _isFastMode.value = false
@@ -451,6 +472,7 @@ class CameraViewModel : ViewModel() {
                 cameraController?.setBwMode(false)
                 cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_RAW)
             }
+
             else -> {
                 if (_isFastMode.value) {
                     _isFastMode.value = false
@@ -485,11 +507,12 @@ class CameraViewModel : ViewModel() {
         saveSettings()
     }
 
-    fun isRawMode(): Boolean {
-        return _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
-    }
+    fun isRawMode(): Boolean = _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
 
-    fun getFormatName(format: Int, fastMode: Boolean = false): String {
+    fun getFormatName(
+        format: Int,
+        fastMode: Boolean = false,
+    ): String {
         if (fastMode) return "HF"
         return when (format) {
             CameraController.OUTPUT_FORMAT_JPEG -> "JPG"
@@ -501,7 +524,7 @@ class CameraViewModel : ViewModel() {
 
     fun onShutterButtonPress() {
         val controller = cameraController ?: return
-        
+
         if (controller.hasPendingCaptures()) {
             return
         }
@@ -527,7 +550,7 @@ class CameraViewModel : ViewModel() {
                 onComplete = { _ -> },
                 onBenchmark = { shutterMs, saveMs ->
                     _lastBenchmark.value = Pair(shutterMs, saveMs)
-                }
+                },
             )
             return
         }
@@ -562,7 +585,7 @@ class CameraViewModel : ViewModel() {
                 },
                 onBenchmark = { shutterMs, saveMs ->
                     _lastBenchmark.value = Pair(shutterMs, saveMs)
-                }
+                },
             )
         }
     }
@@ -577,16 +600,17 @@ class CameraViewModel : ViewModel() {
             lastFocusPoint = null
         }
 
-        val (focusX, focusY) = if (lastFocusPoint != null) {
-            lastFocusPoint!!
-        } else if (screenWidth > 0 && screenHeight > 0) {
-            val centerX = screenWidth / 2f
-            val centerY = screenHeight / 2f
-            lastFocusPoint = Pair(centerX, centerY)
-            Pair(centerX, centerY)
-        } else {
-            return
-        }
+        val (focusX, focusY) =
+            if (lastFocusPoint != null) {
+                lastFocusPoint!!
+            } else if (screenWidth > 0 && screenHeight > 0) {
+                val centerX = screenWidth / 2f
+                val centerY = screenHeight / 2f
+                lastFocusPoint = Pair(centerX, centerY)
+                Pair(centerX, centerY)
+            } else {
+                return
+            }
 
         lastFocusTimestamp = currentTime
         showCrosshair(focusX, focusY)
@@ -598,7 +622,12 @@ class CameraViewModel : ViewModel() {
         hideCrosshair()
     }
 
-    fun onTapToFocus(x: Float, y: Float, width: Float, height: Float) {
+    fun onTapToFocus(
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+    ) {
         if (_isFastMode.value) return
         lastFocusPoint = Pair(x, y)
         lastFocusTimestamp = System.currentTimeMillis()
@@ -609,7 +638,7 @@ class CameraViewModel : ViewModel() {
     fun toggleFastMode() {
         // Don't allow mode changes while capturing or saving
         if (_isCapturing.value || _isSaving.value) return
-        
+
         val enable = !_isFastMode.value
 
         if (enable) {
@@ -635,9 +664,7 @@ class CameraViewModel : ViewModel() {
         saveSettings()
     }
 
-    fun hasPendingCaptures(): Boolean {
-        return cameraController?.hasPendingCaptures() ?: false
-    }
+    fun hasPendingCaptures(): Boolean = cameraController?.hasPendingCaptures() ?: false
 
     fun onPause() {
         orientationEventListener?.disable()
@@ -648,11 +675,11 @@ class CameraViewModel : ViewModel() {
     fun onResume(textureView: TextureView?) {
         val context = appContext ?: return
         val tv = textureView ?: return
-        
+
         if (cameraController == null) {
             cameraController = CameraController(context)
         }
-        
+
         setupOrientationListener(context)
         bindCamera(tv)
     }
