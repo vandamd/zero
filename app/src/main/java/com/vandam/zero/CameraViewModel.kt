@@ -107,6 +107,7 @@ class CameraViewModel : ViewModel() {
 
     private var priorPreview: Boolean = true
     private var priorFormat: Int = 0
+    private var priorFlash: Boolean = false
 
     private var orientationEventListener: OrientationEventListener? = null
     private var currentRotation: Int = Surface.ROTATION_0
@@ -479,6 +480,7 @@ class CameraViewModel : ViewModel() {
             hfFormatCode -> {
                 priorPreview = _previewEnabled.value
                 priorFormat = _outputFormat.value
+                priorFlash = _flashEnabled.value
 
                 _isFastMode.value = true
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
@@ -495,7 +497,9 @@ class CameraViewModel : ViewModel() {
                 if (_isFastMode.value) {
                     _isFastMode.value = false
                     _previewEnabled.value = priorPreview
+                    _flashEnabled.value = priorFlash
                     cameraController?.setFastMode(false)
+                    cameraController?.setFlashEnabled(priorFlash)
                 }
 
                 _bwMode.value = false
@@ -508,7 +512,9 @@ class CameraViewModel : ViewModel() {
                 if (_isFastMode.value) {
                     _isFastMode.value = false
                     _previewEnabled.value = priorPreview
+                    _flashEnabled.value = priorFlash
                     cameraController?.setFastMode(false)
+                    cameraController?.setFlashEnabled(priorFlash)
                 }
 
                 _bwMode.value = _colorMode.value

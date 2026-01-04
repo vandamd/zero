@@ -554,20 +554,57 @@ class CameraController(
 
         val targetSurface = rawImageReader!!.surface
 
+        // If flash is enabled in auto exposure mode, run precapture sequence first
+        if (flashEnabled && autoExposure) {
+            runPrecaptureSequence {
+                captureRawWithCurrentSettings(camera, session, targetSurface, onComplete)
+            }
+        } else {
+            captureRawWithCurrentSettings(camera, session, targetSurface, onComplete)
+        }
+    }
+
+    /**
+     * Captures RAW with current settings (called after precapture if needed).
+     */
+    private fun captureRawWithCurrentSettings(
+        camera: CameraDevice,
+        session: CameraCaptureSession,
+        targetSurface: Surface,
+        onComplete: (Uri?) -> Unit,
+    ) {
         try {
             val captureBuilder =
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(targetSurface)
                     applyCommonSettings(this)
 
+                    // Override flash settings for capture
                     if (flashEnabled) {
                         if (autoExposure) {
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
                         }
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
+
+                    // Disable lens shading compensation for minimal processing
+                    set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
+
+                    // Copy focus regions from preview if set (for tap-to-focus consistency)
+                    previewRequestBuilder?.let { preview ->
+                        preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { regions ->
+                            set(CaptureRequest.CONTROL_AF_REGIONS, regions)
+                        }
+                        preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { regions ->
+                            set(CaptureRequest.CONTROL_AE_REGIONS, regions)
+                        }
+                    }
                 }
 
+            Log.d(
+                TAG,
+                "Taking RAW photo (autoExposure=$autoExposure, flash=$flashEnabled, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)",
+            )
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error taking photo", e)
@@ -577,14 +614,71 @@ class CameraController(
     }
 
     /**
-     * Vanilla JPEG capture - uses camera defaults with NO custom processing settings.
-     * This should work correctly on quad bayer sensors that have issues with custom settings.
+     * JPEG capture - applies the same settings used in preview to ensure consistency.
      */
     private fun takeVanillaJpegPhoto() {
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
         val jpegSurface = jpegImageReader?.surface ?: return
 
+        // If flash is enabled in auto exposure mode, run precapture sequence first
+        if (flashEnabled && autoExposure) {
+            runPrecaptureSequence {
+                captureJpegWithCurrentSettings(camera, session, jpegSurface)
+            }
+        } else {
+            captureJpegWithCurrentSettings(camera, session, jpegSurface)
+        }
+    }
+
+    /**
+     * Runs AE precapture sequence for flash metering, then executes the callback.
+     */
+    private fun runPrecaptureSequence(onReady: () -> Unit) {
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+
+        try {
+            // Set flash mode for precapture metering
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+
+            session.capture(
+                builder.build(),
+                object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult,
+                    ) {
+                        // Reset trigger
+                        builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+
+                        // Check AE state - wait for converged or flash required
+                        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                        Log.d(TAG, "Precapture AE state: $aeState")
+
+                        // Proceed with capture (flash will fire)
+                        onReady()
+                    }
+                },
+                backgroundHandler,
+            )
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Error running precapture sequence", e)
+            // Fall back to direct capture
+            onReady()
+        }
+    }
+
+    /**
+     * Captures JPEG with current settings (called after precapture if needed).
+     */
+    private fun captureJpegWithCurrentSettings(
+        camera: CameraDevice,
+        session: CameraCaptureSession,
+        jpegSurface: Surface,
+    ) {
         try {
             val captureBuilder =
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
@@ -592,40 +686,38 @@ class CameraController(
 
                     set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
 
-                    if (autoExposure) {
-                        if (flashEnabled) {
+                    // Apply the same settings used in preview for consistency
+                    applyCommonSettings(this)
+
+                    // Override flash settings for capture
+                    if (flashEnabled) {
+                        if (autoExposure) {
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-                        } else {
-                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                         }
-                        set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
-                    } else {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                        set(CaptureRequest.SENSOR_SENSITIVITY, manualIso)
-                        set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
-                        if (flashEnabled) {
-                            set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
-                        }
+                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
 
-                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
-                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-                    set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
+                    // Disable lens shading compensation for minimal processing
                     set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
-                    set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-                    set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
-                    }
 
-                    set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                    // Copy focus regions from preview if set (for tap-to-focus consistency)
+                    previewRequestBuilder?.let { preview ->
+                        preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { regions ->
+                            set(CaptureRequest.CONTROL_AF_REGIONS, regions)
+                        }
+                        preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { regions ->
+                            set(CaptureRequest.CONTROL_AE_REGIONS, regions)
+                        }
+                    }
                 }
 
-            Log.d(TAG, "Taking JPEG photo (autoExposure=$autoExposure, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)")
+            Log.d(
+                TAG,
+                "Taking JPEG photo (autoExposure=$autoExposure, flash=$flashEnabled, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)",
+            )
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Error taking vanilla JPEG photo", e)
+            Log.e(TAG, "Error taking JPEG photo", e)
             synchronized(captureLock) { pendingCaptureCount-- }
             onCompleteCallback?.invoke(null)
         }
@@ -650,8 +742,29 @@ class CameraController(
                 request: CaptureRequest,
                 result: TotalCaptureResult,
             ) {
-                Log.d(TAG, "onCaptureCompleted")
                 lastCaptureResult = result
+
+                // Log actual capture settings from result
+                val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+                val actualExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                val actualAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+                val actualAwbMode = result.get(CaptureResult.CONTROL_AWB_MODE)
+                val actualAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
+                val actualTonemap = result.get(CaptureResult.TONEMAP_MODE)
+                val actualNoiseReduction = result.get(CaptureResult.NOISE_REDUCTION_MODE)
+                val actualEdge = result.get(CaptureResult.EDGE_MODE)
+                val actualColorCorrection = result.get(CaptureResult.COLOR_CORRECTION_MODE)
+
+                Log.d(
+                    TAG,
+                    "Capture result: ISO=$actualIso, exposure=${actualExposure}ns, " +
+                        "AE=$actualAeMode, AWB=$actualAwbMode, AF=$actualAfMode",
+                )
+                Log.d(
+                    TAG,
+                    "Capture processing: tonemap=$actualTonemap, NR=$actualNoiseReduction, " +
+                        "edge=$actualEdge, colorCorrection=$actualColorCorrection",
+                )
             }
 
             override fun onCaptureFailed(
