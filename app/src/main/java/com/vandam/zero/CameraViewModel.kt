@@ -124,6 +124,12 @@ class CameraViewModel : ViewModel() {
 
     private var orientationEventListener: OrientationEventListener? = null
     private var currentRotation: Int = Surface.ROTATION_0
+    private var lastOrientationDegrees: Int = 0
+
+    companion object {
+        private const val TAG = "CameraViewModel"
+        private const val ORIENTATION_HYSTERESIS_DEGREES = 10
+    }
 
     enum class ExposureMode {
         AUTO,
@@ -488,7 +494,7 @@ class CameraViewModel : ViewModel() {
         initialRotation?.let { rotation ->
             currentRotation = rotation
             cameraController?.setRotation(rotation)
-            Log.d("CameraViewModel", "Rotation initialized to: $rotation")
+            Log.d(TAG, "Rotation initialized to: $rotation")
         }
 
         orientationEventListener =
@@ -498,23 +504,65 @@ class CameraViewModel : ViewModel() {
                         return
                     }
 
-                    val rotation =
-                        when (orientation) {
-                            in 45..134 -> Surface.ROTATION_270
-                            in 135..224 -> Surface.ROTATION_180
-                            in 225..314 -> Surface.ROTATION_90
-                            else -> Surface.ROTATION_0
-                        }
+                    lastOrientationDegrees = orientation
+
+                    val rotation = calculateRotationWithHysteresis(orientation, currentRotation)
 
                     if (rotation != currentRotation) {
                         currentRotation = rotation
                         cameraController?.setRotation(rotation)
-                        Log.d("CameraViewModel", "Rotation updated to: $rotation (orientation: $orientation°)")
+                        Log.d(TAG, "Rotation updated to: $rotation (orientation: $orientation°)")
                     }
                 }
             }
 
         orientationEventListener?.enable()
+    }
+
+    private fun calculateRotationWithHysteresis(
+        orientation: Int,
+        currentRotation: Int,
+    ): Int {
+        val h = ORIENTATION_HYSTERESIS_DEGREES
+
+        val centerFor0 = 0
+        val centerFor270 = 90
+        val centerFor180 = 180
+        val centerFor90 = 270
+
+        val distanceFromCurrent =
+            when (currentRotation) {
+                Surface.ROTATION_0 -> minOf(orientation, 360 - orientation)
+                Surface.ROTATION_270 -> kotlin.math.abs(orientation - centerFor270)
+                Surface.ROTATION_180 -> kotlin.math.abs(orientation - centerFor180)
+                Surface.ROTATION_90 -> kotlin.math.abs(orientation - centerFor90)
+                else -> 90
+            }
+        if (distanceFromCurrent <= 45 + h) {
+            return currentRotation
+        }
+
+        return when (orientation) {
+            in (45 + h) until (135 - h) -> {
+                Surface.ROTATION_270
+            }
+
+            in (135 + h) until (225 - h) -> {
+                Surface.ROTATION_180
+            }
+
+            in (225 + h) until (315 - h) -> {
+                Surface.ROTATION_90
+            }
+
+            else -> {
+                if (orientation >= (315 + h) || orientation < (45 - h)) {
+                    Surface.ROTATION_0
+                } else {
+                    currentRotation
+                }
+            }
+        }
     }
 
     fun toggleOutputFormat() {

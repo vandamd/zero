@@ -91,6 +91,7 @@ class CameraController(
     private var supportsRaw: Boolean = false
 
     private var currentRotation: Int = Surface.ROTATION_0
+    private var capturedRotation: Int = Surface.ROTATION_0
 
     private var captureStartTimestamp: Long = 0
     private var shutterTimestamp: Long = 0
@@ -574,6 +575,7 @@ class CameraController(
         onBenchmarkCallback = onBenchmark
 
         captureStartTimestamp = System.currentTimeMillis()
+        capturedRotation = currentRotation
 
         if (currentOutputFormat == OUTPUT_FORMAT_JPEG) {
             if (fastMode && zslEnabled) {
@@ -1217,7 +1219,7 @@ class CameraController(
 
     private fun getJpegOrientation(): Int {
         val deviceDegrees =
-            when (currentRotation) {
+            when (capturedRotation) {
                 Surface.ROTATION_0 -> 0
                 Surface.ROTATION_90 -> 90
                 Surface.ROTATION_180 -> 180
