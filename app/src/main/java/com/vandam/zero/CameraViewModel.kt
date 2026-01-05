@@ -525,43 +525,24 @@ class CameraViewModel : ViewModel() {
     ): Int {
         val h = ORIENTATION_HYSTERESIS_DEGREES
 
-        val centerFor0 = 0
-        val centerFor270 = 90
-        val centerFor180 = 180
-        val centerFor90 = 270
-
         val distanceFromCurrent =
             when (currentRotation) {
                 Surface.ROTATION_0 -> minOf(orientation, 360 - orientation)
-                Surface.ROTATION_270 -> kotlin.math.abs(orientation - centerFor270)
-                Surface.ROTATION_180 -> kotlin.math.abs(orientation - centerFor180)
-                Surface.ROTATION_90 -> kotlin.math.abs(orientation - centerFor90)
+                Surface.ROTATION_270 -> kotlin.math.abs(orientation - 90)
+                Surface.ROTATION_180 -> kotlin.math.abs(orientation - 180)
+                Surface.ROTATION_90 -> kotlin.math.abs(orientation - 270)
                 else -> 90
             }
+
         if (distanceFromCurrent <= 45 + h) {
             return currentRotation
         }
 
-        return when (orientation) {
-            in (45 + h) until (135 - h) -> {
-                Surface.ROTATION_270
-            }
-
-            in (135 + h) until (225 - h) -> {
-                Surface.ROTATION_180
-            }
-
-            in (225 + h) until (315 - h) -> {
-                Surface.ROTATION_90
-            }
-
-            else -> {
-                if (orientation >= (315 + h) || orientation < (45 - h)) {
-                    Surface.ROTATION_0
-                } else {
-                    currentRotation
-                }
-            }
+        return when {
+            orientation >= 315 || orientation < 45 -> Surface.ROTATION_0
+            orientation in 45 until 135 -> Surface.ROTATION_270
+            orientation in 135 until 225 -> Surface.ROTATION_180
+            else -> Surface.ROTATION_90
         }
     }
 
