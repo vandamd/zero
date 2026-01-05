@@ -18,7 +18,7 @@ I recommend using [Obtainium](https://github.com/ImranR98/Obtainium) and adding 
     - Noise reduction: OFF
     - Edge enhancement: OFF
     - Hot pixel correction: OFF
-    - Lens shading correction: OFF
+    - Lens shading correction: FAST
     - Distortion correction: OFF
     - Tonemap: linear identity curve
     - Color correction: FAST (AWB on, aberration OFF)
