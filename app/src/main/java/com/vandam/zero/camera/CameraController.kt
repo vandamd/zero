@@ -498,6 +498,7 @@ class CameraController(
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
         builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
+        builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_FAST)
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
 
         // Minimize tonemapping: use linear identity curve everywhere
@@ -514,7 +515,12 @@ class CameraController(
 
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
 
-        val oisMode = if (oisEnabled) CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON else CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+        val oisMode =
+            if (oisEnabled) {
+                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+            } else {
+                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+            }
         builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, oisMode)
     }
 
@@ -621,9 +627,6 @@ class CameraController(
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
 
-                    // Disable lens shading compensation for minimal processing
-                    set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
-
                     // Copy focus regions from preview if set (for tap-to-focus consistency)
                     previewRequestBuilder?.let { preview ->
                         preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { regions ->
@@ -685,10 +688,12 @@ class CameraController(
                         request: CaptureRequest,
                         result: TotalCaptureResult,
                     ) {
-                        // Reset trigger
+                        // Reset trigger and restore preview settings
                         builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                        applyCommonSettings(builder)
+                        session.setRepeatingRequest(builder.build(), null, backgroundHandler)
 
-                        // Check AE state - wait for converged or flash required
+                        // Check AE state
                         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
                         Log.d(TAG, "Precapture AE state: $aeState")
 
@@ -730,9 +735,6 @@ class CameraController(
                         }
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
-
-                    // Disable lens shading compensation for minimal processing
-                    set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
 
                     // Copy focus regions from preview if set (for tap-to-focus consistency)
                     previewRequestBuilder?.let { preview ->
@@ -1429,6 +1431,7 @@ class CameraController(
             )
 
         try {
+            applyCommonSettings(builder)
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(focusRegion))
             if (maxAeRegions > 0) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(focusRegion))
@@ -1460,6 +1463,7 @@ class CameraController(
         val builder = previewRequestBuilder ?: return
 
         try {
+            applyCommonSettings(builder)
             builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
             session.capture(builder.build(), null, backgroundHandler)
 
