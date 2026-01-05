@@ -92,6 +92,9 @@ class CameraViewModel : ViewModel() {
     private val _redTextMode = MutableStateFlow(false)
     val redTextMode: StateFlow<Boolean> = _redTextMode
 
+    private val _oisEnabled = MutableStateFlow(true)
+    val oisEnabled: StateFlow<Boolean> = _oisEnabled
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
 
@@ -241,6 +244,13 @@ class CameraViewModel : ViewModel() {
         return true
     }
 
+    fun toggleOis() {
+        _oisEnabled.value = !_oisEnabled.value
+        cameraController?.setOisEnabled(_oisEnabled.value)
+        _toastMessage.value = if (_oisEnabled.value) "OIS ON" else "OIS OFF"
+        saveSettings()
+    }
+
     private fun isDisplayGrayscale(context: Context): Boolean {
         val daltonizerEnabled =
             android.provider.Settings.Secure.getInt(
@@ -375,6 +385,7 @@ class CameraViewModel : ViewModel() {
             _colorMode.value = p.getBoolean("color_mode_bw", false)
             _isFastMode.value = p.getBoolean("fast_mode", false)
             _redTextMode.value = p.getBoolean("red_text_mode", false)
+            _oisEnabled.value = p.getBoolean("ois_enabled", true)
         }
     }
 
@@ -392,6 +403,7 @@ class CameraViewModel : ViewModel() {
             putBoolean("color_mode_bw", _colorMode.value)
             putBoolean("fast_mode", _isFastMode.value)
             putBoolean("red_text_mode", _redTextMode.value)
+            putBoolean("ois_enabled", _oisEnabled.value)
             apply()
         }
     }
@@ -428,6 +440,7 @@ class CameraViewModel : ViewModel() {
         cameraController?.setFlashEnabled(_flashEnabled.value)
         cameraController?.setBwMode(_bwMode.value)
         cameraController?.setFastMode(_isFastMode.value)
+        cameraController?.setOisEnabled(_oisEnabled.value)
 
         cameraController?.bindCamera(
             textureView,

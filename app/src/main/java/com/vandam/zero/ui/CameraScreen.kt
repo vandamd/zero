@@ -464,12 +464,17 @@ private fun SettingsButtons(
                     "RGB"
                 },
             color = uiState.textColor,
-            enabled = !uiState.isBusy && !uiState.isRawMode,
+            enabled = !uiState.isBusy,
             alpha = if (uiState.isRawMode) 0.3f else 1f,
             onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleColorMode()
             },
+            onLongPress = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleOis()
+            },
+            tapEnabled = !uiState.isRawMode,
         )
 
         if (!BuildConfig.MONOCHROME_MODE) {
@@ -541,18 +546,17 @@ private fun ToolbarTextButton(
     alpha: Float = 1f,
     onTap: () -> Unit,
     onLongPress: (() -> Unit)? = null,
+    tapEnabled: Boolean = true,
 ) {
     Box(
         modifier =
             Modifier
                 .rotateVertically(clockwise = true)
-                .pointerInput(enabled) {
-                    if (enabled) {
-                        detectTapGestures(
-                            onTap = { onTap() },
-                            onLongPress = { onLongPress?.invoke() },
-                        )
-                    }
+                .pointerInput(tapEnabled) {
+                    detectTapGestures(
+                        onTap = { if (tapEnabled) onTap() },
+                        onLongPress = { onLongPress?.invoke() },
+                    )
                 },
         contentAlignment = Alignment.Center,
     ) {

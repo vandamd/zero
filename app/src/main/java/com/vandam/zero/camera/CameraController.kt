@@ -74,6 +74,7 @@ class CameraController(
     private var bwMode: Boolean = false
     private var fastMode: Boolean = false
     private var monoFlavor: Boolean = BuildConfig.MONOCHROME_MODE
+    private var oisEnabled: Boolean = true
 
     private var autoExposure: Boolean = true
     private var exposureCompensation: Int = 0
@@ -511,6 +512,9 @@ class CameraController(
         builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
 
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
+
+        val oisMode = if (oisEnabled) CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON else CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+        builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, oisMode)
     }
 
     /**
@@ -1245,6 +1249,13 @@ class CameraController(
         flashEnabled = enabled
         Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
         refreshFlashState()
+    }
+
+    fun setOisEnabled(enabled: Boolean) {
+        if (oisEnabled == enabled) return
+        oisEnabled = enabled
+        Log.d(TAG, "OIS ${if (enabled) "enabled" else "disabled"}")
+        updatePreview()
     }
 
     private fun refreshFlashState() {
