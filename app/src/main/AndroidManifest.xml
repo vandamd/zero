@@ -21,6 +21,7 @@
         <activity
             android:name="com.vandam.zero.MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
             android:theme="@style/AppTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
