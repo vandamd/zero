@@ -111,6 +111,10 @@ class CameraController(
 
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
+    fun getIsoRange(): IntRange? = isoRange?.let { it.lower..it.upper }
+
+    fun getExposureTimeRange(): LongRange? = exposureTimeRange?.let { it.lower..it.upper }
+
     fun createPreviewView(context: Context): TextureView =
         TextureView(context).also { tv ->
             textureView = tv
@@ -474,8 +478,19 @@ class CameraController(
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
         } else {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, manualIso)
+
+            val maxSensorIso = isoRange?.upper ?: 1600
+            val (sensorIso, boost) =
+                if (manualIso <= maxSensorIso) {
+                    manualIso to 100
+                } else {
+                    val requiredBoost = (manualIso * 100) / maxSensorIso
+                    maxSensorIso to requiredBoost.coerceAtMost(3199)
+                }
+
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorIso)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
+            builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, boost)
         }
 
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
@@ -1319,10 +1334,11 @@ class CameraController(
         exposureTimeNs: Long,
     ) {
         autoExposure = false
+        val maxEffectiveIso = (isoRange?.upper ?: 1600) * 32
         manualIso =
             iso.coerceIn(
                 isoRange?.lower ?: 100,
-                isoRange?.upper ?: 3200,
+                maxEffectiveIso,
             )
         manualExposureTimeNs =
             exposureTimeNs.coerceIn(

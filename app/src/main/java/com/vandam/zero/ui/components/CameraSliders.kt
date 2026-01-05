@@ -113,43 +113,37 @@ fun ExposureSlider(
     }
 }
 
-/**
- * A custom slider for ISO adjustment.
- * Displays ISO values on a logarithmic scale from 100 to 3200.
- *
- * @param value Current ISO value.
- * @param onValueChange Callback when the value changes.
- * @param modifier Modifier to be applied to the slider.
- */
 @Composable
 fun IsoSlider(
     value: Int,
     onValueChange: (Int) -> Unit,
+    isoRange: IntRange,
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
     var lastSnappedValue by remember { mutableStateOf(value) }
+    val isoSteps = remember(isoRange) { generateIsoSteps(isoRange) }
 
     Canvas(
         modifier =
             modifier
-                .pointerInput(Unit) {
+                .pointerInput(isoRange) {
                     detectDragGestures { change, _ ->
                         change.consume()
                         val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                        val rawValue = positionToIso(fraction)
-                        val snappedValue = snapToNearestIso(rawValue)
+                        val rawValue = positionToIso(fraction, isoRange)
+                        val snappedValue = snapToNearestIso(rawValue, isoSteps)
                         if (snappedValue != lastSnappedValue) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             lastSnappedValue = snappedValue
                             onValueChange(snappedValue)
                         }
                     }
-                }.pointerInput(Unit) {
+                }.pointerInput(isoRange) {
                     detectTapGestures { offset ->
                         val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        val rawValue = positionToIso(fraction)
-                        val snappedValue = snapToNearestIso(rawValue)
+                        val rawValue = positionToIso(fraction, isoRange)
+                        val snappedValue = snapToNearestIso(rawValue, isoSteps)
                         if (snappedValue != lastSnappedValue) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             lastSnappedValue = snappedValue
@@ -173,8 +167,8 @@ fun IsoSlider(
         )
 
         // Draw ISO step notches
-        ISO_STEPS.forEach { iso ->
-            val normalizedValue = isoToPosition(iso)
+        isoSteps.forEach { iso ->
+            val normalizedValue = isoToPosition(iso, isoRange)
             val notchX = normalizedValue * size.width
 
             val length =
@@ -193,7 +187,7 @@ fun IsoSlider(
         }
 
         // Draw thumb
-        val normalizedValue = isoToPosition(value)
+        val normalizedValue = isoToPosition(value, isoRange)
         val thumbX = normalizedValue * size.width
 
         drawLine(
@@ -205,43 +199,37 @@ fun IsoSlider(
     }
 }
 
-/**
- * A custom slider for shutter speed adjustment.
- * Displays shutter speeds from 1/1000s to 1s.
- *
- * @param value Current shutter speed in nanoseconds.
- * @param onValueChange Callback when the value changes.
- * @param modifier Modifier to be applied to the slider.
- */
 @Composable
 fun ShutterSpeedSlider(
     value: Long,
     onValueChange: (Long) -> Unit,
+    shutterRange: LongRange,
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
     var lastSnappedValue by remember { mutableStateOf(value) }
+    val shutterSteps = remember(shutterRange) { generateShutterSteps(shutterRange) }
 
     Canvas(
         modifier =
             modifier
-                .pointerInput(Unit) {
+                .pointerInput(shutterRange) {
                     detectDragGestures { change, _ ->
                         change.consume()
                         val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                        val rawValue = positionToShutter(fraction)
-                        val snappedValue = snapToNearestShutter(rawValue)
+                        val rawValue = positionToShutter(fraction, shutterSteps)
+                        val snappedValue = snapToNearestShutter(rawValue, shutterSteps)
                         if (snappedValue != lastSnappedValue) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             lastSnappedValue = snappedValue
                             onValueChange(snappedValue)
                         }
                     }
-                }.pointerInput(Unit) {
+                }.pointerInput(shutterRange) {
                     detectTapGestures { offset ->
                         val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        val rawValue = positionToShutter(fraction)
-                        val snappedValue = snapToNearestShutter(rawValue)
+                        val rawValue = positionToShutter(fraction, shutterSteps)
+                        val snappedValue = snapToNearestShutter(rawValue, shutterSteps)
                         if (snappedValue != lastSnappedValue) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             lastSnappedValue = snappedValue
@@ -265,8 +253,8 @@ fun ShutterSpeedSlider(
         )
 
         // Draw shutter speed notches
-        SHUTTER_SPEEDS.forEachIndexed { index, speed ->
-            val normalizedValue = index.toFloat() / (SHUTTER_SPEEDS.size - 1)
+        shutterSteps.forEachIndexed { index, speed ->
+            val normalizedValue = index.toFloat() / (shutterSteps.size - 1)
             val notchX = normalizedValue * size.width
 
             val length =
@@ -285,7 +273,7 @@ fun ShutterSpeedSlider(
         }
 
         // Draw thumb
-        val normalizedValue = shutterToPosition(value)
+        val normalizedValue = shutterToPosition(value, shutterSteps)
         val thumbX = normalizedValue * size.width
 
         drawLine(
@@ -299,24 +287,46 @@ fun ShutterSpeedSlider(
 
 // --- ISO Slider Utilities ---
 
-private val ISO_STEPS = listOf(100, 200, 400, 800, 1600, 3200)
+private val ALL_ISO_STEPS = listOf(50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600, 51200)
 
-private fun positionToIso(position: Float): Int {
-    val logValue = 100 * 2.0.pow((position * 5).toDouble())
-    return logValue.toInt().coerceIn(100, 3200)
+private fun generateIsoSteps(range: IntRange): List<Int> = ALL_ISO_STEPS.filter { it in range }
+
+private fun positionToIso(
+    position: Float,
+    range: IntRange,
+): Int {
+    if (range.first >= range.last) return range.first
+    val logMin = log2(range.first.toDouble())
+    val logMax = log2(range.last.toDouble())
+    val logValue = logMin + position * (logMax - logMin)
+    return 2.0.pow(logValue).toInt().coerceIn(range.first, range.last)
 }
 
-private fun isoToPosition(iso: Int): Float {
-    val position = log2(iso / 100.0) / 5.0
-    return position.toFloat().coerceIn(0f, 1f)
+private fun isoToPosition(
+    iso: Int,
+    range: IntRange,
+): Float {
+    if (range.first >= range.last) return 0.5f
+    val logMin = log2(range.first.toDouble())
+    val logMax = log2(range.last.toDouble())
+    val logIso = log2(iso.toDouble())
+    return ((logIso - logMin) / (logMax - logMin)).toFloat().coerceIn(0f, 1f)
 }
 
-private fun snapToNearestIso(iso: Int): Int = ISO_STEPS.minByOrNull { abs(it - iso) } ?: 400
+private fun snapToNearestIso(
+    iso: Int,
+    steps: List<Int>,
+): Int = steps.minByOrNull { abs(it - iso) } ?: iso
 
 // --- Shutter Speed Slider Utilities ---
 
-private val SHUTTER_SPEEDS =
+private val ALL_SHUTTER_SPEEDS =
     listOf(
+        31_250L,
+        62_500L,
+        125_000L,
+        250_000L,
+        500_000L,
         1_000_000L,
         2_000_000L,
         4_000_000L,
@@ -330,17 +340,30 @@ private val SHUTTER_SPEEDS =
         1_000_000_000L,
     )
 
-private fun positionToShutter(position: Float): Long {
-    val index = (position * (SHUTTER_SPEEDS.size - 1)).toInt().coerceIn(0, SHUTTER_SPEEDS.size - 1)
-    return SHUTTER_SPEEDS[index]
+private fun generateShutterSteps(range: LongRange): List<Long> = ALL_SHUTTER_SPEEDS.filter { it in range }
+
+private fun positionToShutter(
+    position: Float,
+    steps: List<Long>,
+): Long {
+    if (steps.isEmpty()) return 16_666_666L
+    val index = (position * (steps.size - 1)).toInt().coerceIn(0, steps.size - 1)
+    return steps[index]
 }
 
-private fun shutterToPosition(shutter: Long): Float {
-    val index = SHUTTER_SPEEDS.indexOfFirst { it >= shutter }.takeIf { it >= 0 } ?: (SHUTTER_SPEEDS.size - 1)
-    return index.toFloat() / (SHUTTER_SPEEDS.size - 1)
+private fun shutterToPosition(
+    shutter: Long,
+    steps: List<Long>,
+): Float {
+    if (steps.size <= 1) return 0.5f
+    val index = steps.indexOfFirst { it >= shutter }.takeIf { it >= 0 } ?: (steps.size - 1)
+    return index.toFloat() / (steps.size - 1)
 }
 
-private fun snapToNearestShutter(ns: Long): Long = SHUTTER_SPEEDS.minByOrNull { abs(it - ns) } ?: 16_666_666L
+private fun snapToNearestShutter(
+    ns: Long,
+    steps: List<Long>,
+): Long = steps.minByOrNull { abs(it - ns) } ?: ns
 
 /**
  * Formats a shutter speed value in nanoseconds to a human-readable string.

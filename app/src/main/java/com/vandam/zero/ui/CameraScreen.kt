@@ -163,6 +163,8 @@ private data class CameraUiState(
     val exposureValue: Float,
     val isoValue: Int,
     val shutterSpeedNs: Long,
+    val isoRange: IntRange,
+    val shutterRange: LongRange,
     val isFocusButtonHeld: Boolean,
     val outputFormat: Int,
     val flashEnabled: Boolean,
@@ -199,6 +201,8 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val exposureValue by viewModel.exposureValue.collectAsState()
     val isoValue by viewModel.isoValue.collectAsState()
     val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
+    val isoRange by viewModel.isoRange.collectAsState()
+    val shutterRange by viewModel.shutterRange.collectAsState()
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
@@ -222,6 +226,8 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         exposureValue = exposureValue,
         isoValue = isoValue,
         shutterSpeedNs = shutterSpeedNs,
+        isoRange = isoRange,
+        shutterRange = shutterRange,
         isFocusButtonHeld = isFocusButtonHeld,
         outputFormat = outputFormat,
         flashEnabled = flashEnabled,
@@ -627,6 +633,8 @@ private fun CameraPreviewArea(
             exposureValue = uiState.exposureValue,
             isoValue = uiState.isoValue,
             shutterSpeedNs = uiState.shutterSpeedNs,
+            isoRange = uiState.isoRange,
+            shutterRange = uiState.shutterRange,
             viewModel = viewModel,
         )
 
@@ -748,6 +756,8 @@ private fun SliderPanel(
     exposureValue: Float,
     isoValue: Int,
     shutterSpeedNs: Long,
+    isoRange: IntRange,
+    shutterRange: LongRange,
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -778,6 +788,7 @@ private fun SliderPanel(
                 IsoSlider(
                     value = isoValue,
                     onValueChange = { viewModel.setIsoValue(it) },
+                    isoRange = isoRange,
                     modifier = sliderModifier,
                 )
             }
@@ -788,6 +799,7 @@ private fun SliderPanel(
                 ShutterSpeedSlider(
                     value = shutterSpeedNs,
                     onValueChange = { viewModel.setShutterSpeed(it) },
+                    shutterRange = shutterRange,
                     modifier = sliderModifier,
                 )
             }

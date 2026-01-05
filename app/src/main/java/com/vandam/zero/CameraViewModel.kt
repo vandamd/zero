@@ -63,6 +63,14 @@ class CameraViewModel : ViewModel() {
     private val _shutterSpeedNs = MutableStateFlow(16_666_666L)
     val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs
 
+    private val _isoRange = MutableStateFlow(100..3200)
+    val isoRange: StateFlow<IntRange> = _isoRange
+
+    private var nativeIsoRange: IntRange = 100..1600
+
+    private val _shutterRange = MutableStateFlow(1_000_000L..1_000_000_000L)
+    val shutterRange: StateFlow<LongRange> = _shutterRange
+
     private val _outputFormat = MutableStateFlow(CameraController.OUTPUT_FORMAT_JPEG)
     val outputFormat: StateFlow<Int> = _outputFormat
 
@@ -305,14 +313,16 @@ class CameraViewModel : ViewModel() {
     }
 
     fun setIsoValue(iso: Int) {
-        _isoValue.value = iso.coerceIn(100, 3200)
-        cameraController?.setManualExposure(iso, _shutterSpeedNs.value)
+        val range = _isoRange.value
+        _isoValue.value = iso.coerceIn(range.first, range.last)
+        cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         saveSettings()
     }
 
     fun setShutterSpeed(ns: Long) {
-        _shutterSpeedNs.value = ns
-        cameraController?.setManualExposure(_isoValue.value, ns)
+        val range = _shutterRange.value
+        _shutterSpeedNs.value = ns.coerceIn(range.first, range.last)
+        cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         saveSettings()
     }
 
@@ -330,6 +340,17 @@ class CameraViewModel : ViewModel() {
 
     fun closeAllPanels() {
         _sliderMode.value = SliderMode.NONE
+    }
+
+    private fun updateIsoRangeForFormat() {
+        val isRaw = _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
+        _isoRange.value =
+            if (isRaw) {
+                nativeIsoRange
+            } else {
+                nativeIsoRange.first..(nativeIsoRange.last * 32)
+            }
+        _isoValue.value = _isoValue.value.coerceIn(_isoRange.value.first, _isoRange.value.last)
     }
 
     fun initialize(context: Context) {
@@ -425,6 +446,12 @@ class CameraViewModel : ViewModel() {
                 _availableFormats.value = orderedFormats
             },
             onCameraReady = {
+                cameraController?.getIsoRange()?.let { sensorRange ->
+                    nativeIsoRange = sensorRange
+                    updateIsoRangeForFormat()
+                }
+                cameraController?.getExposureTimeRange()?.let { _shutterRange.value = it }
+
                 if (_exposureMode.value == ExposureMode.AUTO) {
                     cameraController?.setAutoExposure(true, _exposureValue.value)
                 } else {
@@ -502,6 +529,7 @@ class CameraViewModel : ViewModel() {
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
                 _bwMode.value = _colorMode.value
                 _flashEnabled.value = false
+                updateIsoRangeForFormat()
 
                 cameraController?.setFastMode(true)
                 cameraController?.setBwMode(_bwMode.value)
@@ -520,6 +548,7 @@ class CameraViewModel : ViewModel() {
 
                 _bwMode.value = false
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_RAW
+                updateIsoRangeForFormat()
                 cameraController?.setBwMode(false)
                 cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_RAW)
             }
@@ -535,6 +564,7 @@ class CameraViewModel : ViewModel() {
 
                 _bwMode.value = _colorMode.value
                 _outputFormat.value = newOption
+                updateIsoRangeForFormat()
                 cameraController?.setBwMode(_bwMode.value)
                 cameraController?.setOutputFormat(newOption)
             }
