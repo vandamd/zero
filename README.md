@@ -29,6 +29,7 @@ I recommend using [Obtainium](https://github.com/ImranR98/Obtainium) and adding 
 - Composition Grid
 - Preview images after capture (long press grid icon to toggle)
 - High-res viewfinder (long press flash icon to toggle)
+- Optical image stabilisation (long press RGB/BW button to toggle, on by default)
 - Red text mode for night photography (long press mode button to toggle). Requires granting permission, outlined in [Greyscale Toggle](#greyscale-toggle).
 
 ## Capture Modes
