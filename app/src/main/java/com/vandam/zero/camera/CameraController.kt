@@ -66,7 +66,9 @@ class CameraController(
 
     private var pendingRawImage: Image? = null
     private var pendingThumbnailImage: Image? = null
+    private var rawCaptureTimeoutJob: kotlinx.coroutines.Job? = null
     private val rawCaptureLock = Object()
+    private val rawCaptureTimeoutMs = 3000L
 
     @Volatile private var pendingVanillaJpegCapture: Boolean = false
 
@@ -793,6 +795,7 @@ class CameraController(
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error taking JPEG photo", e)
+            pendingVanillaJpegCapture = false
             synchronized(captureLock) { pendingCaptureCount-- }
             onCompleteCallback?.invoke(null)
         }
@@ -1152,13 +1155,41 @@ class CameraController(
     }
 
     private fun checkAndProcessRawCapture() {
-        val rawImage = pendingRawImage ?: return
-        val thumbnailImage = pendingThumbnailImage ?: return
+        val rawImage =
+            pendingRawImage ?: run {
+                scheduleRawCaptureTimeout()
+                return
+            }
+        val thumbnailImage =
+            pendingThumbnailImage ?: run {
+                scheduleRawCaptureTimeout()
+                return
+            }
 
+        rawCaptureTimeoutJob?.cancel()
+        rawCaptureTimeoutJob = null
         pendingRawImage = null
         pendingThumbnailImage = null
 
         processRawWithThumbnail(rawImage, thumbnailImage)
+    }
+
+    private fun scheduleRawCaptureTimeout() {
+        if (rawCaptureTimeoutJob?.isActive == true) return
+
+        rawCaptureTimeoutJob =
+            coroutineScope.launch(Dispatchers.IO) {
+                delay(rawCaptureTimeoutMs)
+                synchronized(rawCaptureLock) {
+                    if (pendingRawImage != null || pendingThumbnailImage != null) {
+                        Log.w(TAG, "RAW capture timeout - cleaning up orphaned images")
+                        pendingRawImage?.close()
+                        pendingRawImage = null
+                        pendingThumbnailImage?.close()
+                        pendingThumbnailImage = null
+                    }
+                }
+            }
     }
 
     private fun processRawWithThumbnail(
@@ -1744,7 +1775,14 @@ class CameraController(
 
         stopBackgroundThread()
         coroutineScope.cancel()
-        conversionExecutor.shutdown()
+        conversionExecutor.shutdownNow()
+        try {
+            if (!conversionExecutor.awaitTermination(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Conversion executor did not terminate in time")
+            }
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Interrupted while awaiting executor termination")
+        }
 
         synchronized(captureLock) {
             if (pendingCaptureCount > 0) {
