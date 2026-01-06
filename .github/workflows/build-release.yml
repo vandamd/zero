@@ -15,13 +15,12 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
-      - name: Make Gradle executable
-        run: chmod +x gradlew
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       - name: Install Android Build Tools 35.0.0
         run: yes | sdkmanager "build-tools;35.0.0" "platforms;android-35"
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
       - name: Build release APK
         run: ./gradlew assembleRelease
       - name: Sign APK
