@@ -44,6 +44,7 @@ class CameraController(
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
 
         private const val THUMBNAIL_MAX_DIMENSION = 256
+        private const val JPEG_QUALITY = 95
 
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
@@ -54,7 +55,6 @@ class CameraController(
     private var cameraId: String? = null
     private var cameraCharacteristics: CameraCharacteristics? = null
 
-    private var jpegImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
     private var zslImageReader: ImageReader? = null
     private var thumbnailImageReader: ImageReader? = null
@@ -67,6 +67,8 @@ class CameraController(
     private var pendingRawImage: Image? = null
     private var pendingThumbnailImage: Image? = null
     private val rawCaptureLock = Object()
+
+    @Volatile private var pendingVanillaJpegCapture: Boolean = false
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
@@ -107,6 +109,8 @@ class CameraController(
     private val captureLock = Object()
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    private val conversionExecutor = Executors.newFixedThreadPool(2)
 
     private var onCameraReadyCallback: (() -> Unit)? = null
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
@@ -263,26 +267,6 @@ class CameraController(
         chars: CameraCharacteristics,
         map: android.hardware.camera2.params.StreamConfigurationMap?,
     ) {
-        val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)
-        val jpegSize = jpegSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
-        Log.d(TAG, "JPEG capture size: ${jpegSize.width}x${jpegSize.height}")
-
-        jpegImageReader =
-            ImageReader
-                .newInstance(
-                    jpegSize.width,
-                    jpegSize.height,
-                    ImageFormat.JPEG,
-                    2,
-                ).apply {
-                    setOnImageAvailableListener({ reader ->
-                        val image = reader.acquireLatestImage()
-                        if (image != null) {
-                            handleJpegCapture(image)
-                        }
-                    }, backgroundHandler)
-                }
-
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
 
         if (supportsRaw) {
@@ -325,14 +309,14 @@ class CameraController(
                         }, backgroundHandler)
                     }
         }
-        val zslSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: jpegSize
-        Log.d(TAG, "ZSL (YUV) capture size: ${zslSize.width}x${zslSize.height}")
+        val yuvSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
+        Log.d(TAG, "YUV capture size: ${yuvSize.width}x${yuvSize.height}")
 
         zslImageReader =
             ImageReader
                 .newInstance(
-                    zslSize.width,
-                    zslSize.height,
+                    yuvSize.width,
+                    yuvSize.height,
                     ImageFormat.YUV_420_888,
                     2,
                 ).apply {
@@ -341,6 +325,12 @@ class CameraController(
                             synchronized(zslLock) {
                                 latestZslImage?.close()
                                 latestZslImage = reader.acquireLatestImage()
+                            }
+                        } else if (pendingVanillaJpegCapture) {
+                            pendingVanillaJpegCapture = false
+                            val image = reader.acquireLatestImage()
+                            if (image != null) {
+                                handleVanillaYuvCapture(image)
                             }
                         } else {
                             reader.acquireLatestImage()?.close()
@@ -431,15 +421,14 @@ class CameraController(
 
         val surfaces = mutableListOf<Surface>()
         surfaces.add(previewSurface!!)
-        jpegImageReader?.surface?.let { surfaces.add(it) }
+        zslImageReader?.surface?.let { surfaces.add(it) }
         rawImageReader?.surface?.let { surfaces.add(it) }
         thumbnailImageReader?.surface?.let { surfaces.add(it) }
 
         if (fastMode) {
-            zslImageReader?.surface?.let { surfaces.add(it) }
-            Log.d(TAG, "Session config: Preview + JPEG + RAW + Thumbnail + ZSL(YUV) [fast mode]")
+            Log.d(TAG, "Session config: Preview + YUV + RAW + Thumbnail [fast mode]")
         } else {
-            Log.d(TAG, "Session config: Preview + JPEG + RAW + Thumbnail [normal mode]")
+            Log.d(TAG, "Session config: Preview + YUV + RAW + Thumbnail [normal mode]")
         }
 
         try {
@@ -707,21 +696,18 @@ class CameraController(
         }
     }
 
-    /**
-     * JPEG capture - applies the same settings used in preview to ensure consistency.
-     */
     private fun takeVanillaJpegPhoto() {
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
-        val jpegSurface = jpegImageReader?.surface ?: return
+        val yuvSurface = zslImageReader?.surface ?: return
 
         // If flash is enabled in auto exposure mode, run precapture sequence first
         if (flashEnabled && autoExposure) {
             runPrecaptureSequence {
-                captureJpegWithCurrentSettings(camera, session, jpegSurface)
+                captureJpegWithCurrentSettings(camera, session, yuvSurface)
             }
         } else {
-            captureJpegWithCurrentSettings(camera, session, jpegSurface)
+            captureJpegWithCurrentSettings(camera, session, yuvSurface)
         }
     }
 
@@ -767,20 +753,15 @@ class CameraController(
         }
     }
 
-    /**
-     * Captures JPEG with current settings (called after precapture if needed).
-     */
     private fun captureJpegWithCurrentSettings(
         camera: CameraDevice,
         session: CameraCaptureSession,
-        jpegSurface: Surface,
+        yuvSurface: Surface,
     ) {
         try {
             val captureBuilder =
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                    addTarget(jpegSurface)
-
-                    set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
+                    addTarget(yuvSurface)
 
                     // Apply the same settings used in preview for consistency
                     applyCommonSettings(this)
@@ -806,8 +787,9 @@ class CameraController(
 
             Log.d(
                 TAG,
-                "Taking JPEG photo (autoExposure=$autoExposure, flash=$flashEnabled, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)",
+                "Taking JPEG photo via YUV (autoExposure=$autoExposure, flash=$flashEnabled, ISO=$manualIso, shutter=${manualExposureTimeNs}ns)",
             )
+            pendingVanillaJpegCapture = true
             session.capture(captureBuilder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error taking JPEG photo", e)
@@ -877,10 +859,6 @@ class CameraController(
     // Store capture result for DNG metadata
     private var lastCaptureResult: TotalCaptureResult? = null
 
-    /**
-     * ZSL capture - grabs the latest YUV frame and converts to JPEG.
-     * This provides near-instant shutter response.
-     */
     private fun takeZslPhoto() {
         val image: Image?
 
@@ -925,7 +903,7 @@ class CameraController(
 
         coroutineScope.launch(Dispatchers.IO) {
             val conversionStart = System.currentTimeMillis()
-            val bytes = yuvToJpeg(image)
+            val bytes = yuvToJpeg(image, grayscale = bwMode || monoFlavor)
             val conversionTime = System.currentTimeMillis() - conversionStart
             image.close()
 
@@ -944,15 +922,8 @@ class CameraController(
                 onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
-            val finalBytes =
-                if (bwMode || monoFlavor) {
-                    convertToGrayscaleJpeg(bytes)
-                } else {
-                    bytes
-                }
-
             val saveStart = System.currentTimeMillis()
-            val uri = saveJpegToStorage(finalBytes, writeExifOrientation = true)
+            val uri = saveJpegToStorage(bytes, writeExifOrientation = true)
             val saveTime = System.currentTimeMillis() - saveStart
 
             val totalLatency = System.currentTimeMillis() - captureStartTimestamp
@@ -972,12 +943,60 @@ class CameraController(
         }
     }
 
-    /**
-     * Convert YUV_420_888 image to JPEG bytes.
-     */
-    private fun yuvToJpeg(image: Image): ByteArray? =
+    private fun handleVanillaYuvCapture(image: Image) {
+        coroutineScope.launch(Dispatchers.IO) {
+            val conversionStart = System.currentTimeMillis()
+            val bytes = yuvToJpeg(image, grayscale = bwMode || monoFlavor)
+            val conversionTime = System.currentTimeMillis() - conversionStart
+            image.close()
+
+            if (bytes == null) {
+                Log.e(TAG, "Vanilla JPEG: Failed to convert YUV to JPEG")
+                synchronized(captureLock) { pendingCaptureCount-- }
+                withContext(Dispatchers.Main) {
+                    onPreviewReadyCallback?.invoke(null)
+                    onCompleteCallback?.invoke(null)
+                }
+                return@launch
+            }
+
+            val previewBitmap = extractPreviewBitmap(bytes)
+
+            withContext(Dispatchers.Main) {
+                onPreviewReadyCallback?.invoke(previewBitmap)
+            }
+
+            val saveStart = System.currentTimeMillis()
+            val uri = saveJpegToStorage(bytes, writeExifOrientation = true)
+            val saveTime = System.currentTimeMillis() - saveStart
+
+            val saveCompleteTime = System.currentTimeMillis()
+            val shutterLatency = shutterTimestamp - captureStartTimestamp
+            val processLatency = saveCompleteTime - shutterTimestamp
+            val totalLatency = saveCompleteTime - captureStartTimestamp
+            val modeName = if (bwMode || monoFlavor) "BW" else "JPG"
+            Log.d(
+                TAG,
+                "Benchmark [$modeName]: shutter=${shutterLatency}ms, convert=${conversionTime}ms, save=${saveTime}ms, total=${totalLatency}ms",
+            )
+
+            synchronized(captureLock) {
+                pendingCaptureCount--
+            }
+
+            withContext(Dispatchers.Main) {
+                onBenchmarkCallback?.invoke(shutterLatency, processLatency)
+                onCompleteCallback?.invoke(uri)
+            }
+        }
+    }
+
+    private fun yuvToJpeg(
+        image: Image,
+        grayscale: Boolean = false,
+    ): ByteArray? =
         try {
-            val yuvBytes = yuv420ToNv21(image)
+            val yuvBytes = yuv420ToNv21(image, grayscale)
             val yuvImage =
                 android.graphics.YuvImage(
                     yuvBytes,
@@ -990,7 +1009,7 @@ class CameraController(
             val outputStream = ByteArrayOutputStream()
             yuvImage.compressToJpeg(
                 android.graphics.Rect(0, 0, image.width, image.height),
-                100,
+                JPEG_QUALITY,
                 outputStream,
             )
             outputStream.toByteArray()
@@ -999,86 +1018,121 @@ class CameraController(
             null
         }
 
-    /**
-     * Convert YUV_420_888 to NV21 format for YuvImage.
-     */
-    private fun yuv420ToNv21(image: Image): ByteArray {
+    private fun yuv420ToNv21(
+        image: Image,
+        grayscale: Boolean = false,
+    ): ByteArray {
         val width = image.width
         val height = image.height
         val ySize = width * height
         val uvSize = width * height / 2
         val nv21 = ByteArray(ySize + uvSize)
 
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
 
-        val yRowStride = image.planes[0].rowStride
-        val uvRowStride = image.planes[1].rowStride
-        val uvPixelStride = image.planes[1].pixelStride
+        val yRowStride = yPlane.rowStride
+        val uvRowStride = uPlane.rowStride
+        val uvPixelStride = uPlane.pixelStride
 
-        var pos = 0
-        if (yRowStride == width) {
-            yBuffer.get(nv21, 0, ySize)
-            pos = ySize
-        } else {
-            for (row in 0 until height) {
-                yBuffer.position(row * yRowStride)
-                yBuffer.get(nv21, pos, width)
-                pos += width
-            }
+        if (grayscale) {
+            copyYPlane(yPlane.buffer, nv21, width, height, yRowStride)
+            java.util.Arrays.fill(nv21, ySize, nv21.size, 128.toByte())
+            return nv21
         }
 
-        val uvHeight = height / 2
-        val uvWidth = width / 2
-
-        for (row in 0 until uvHeight) {
-            for (col in 0 until uvWidth) {
-                val uvIndex = row * uvRowStride + col * uvPixelStride
-                nv21[ySize + row * width + col * 2] = vBuffer.get(uvIndex)
-                nv21[ySize + row * width + col * 2 + 1] = uBuffer.get(uvIndex)
+        val yFuture =
+            conversionExecutor.submit {
+                copyYPlane(yPlane.buffer.duplicate(), nv21, width, height, yRowStride)
             }
-        }
+
+        val uvFuture =
+            conversionExecutor.submit {
+                copyUvPlanes(
+                    uPlane.buffer.duplicate(),
+                    vPlane.buffer.duplicate(),
+                    nv21,
+                    width,
+                    height,
+                    ySize,
+                    uvSize,
+                    uvRowStride,
+                    uvPixelStride,
+                )
+            }
+
+        yFuture.get()
+        uvFuture.get()
 
         return nv21
     }
 
-    private fun handleJpegCapture(image: Image) {
-        val buffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        image.close()
-
-        coroutineScope.launch(Dispatchers.IO) {
-            val previewBitmap = extractPreviewBitmap(bytes)
-
-            withContext(Dispatchers.Main) {
-                onPreviewReadyCallback?.invoke(previewBitmap)
+    private fun copyYPlane(
+        yBuffer: java.nio.ByteBuffer,
+        nv21: ByteArray,
+        width: Int,
+        height: Int,
+        yRowStride: Int,
+    ) {
+        val ySize = width * height
+        yBuffer.rewind()
+        if (yRowStride == width) {
+            yBuffer.get(nv21, 0, ySize)
+        } else {
+            for (row in 0 until height) {
+                yBuffer.position(row * yRowStride)
+                yBuffer.get(nv21, row * width, width)
             }
+        }
+    }
 
-            val finalBytes =
-                if (bwMode || monoFlavor) {
-                    convertToGrayscaleJpeg(bytes)
-                } else {
-                    bytes
+    private fun copyUvPlanes(
+        uBuffer: java.nio.ByteBuffer,
+        vBuffer: java.nio.ByteBuffer,
+        nv21: ByteArray,
+        width: Int,
+        height: Int,
+        ySize: Int,
+        uvSize: Int,
+        uvRowStride: Int,
+        uvPixelStride: Int,
+    ) {
+        val uvHeight = height / 2
+        val vCapacity = vBuffer.capacity()
+
+        if (uvPixelStride == 2 && uvRowStride == width) {
+            vBuffer.rewind()
+            val bulkCopySize = minOf(vCapacity, uvSize)
+            vBuffer.get(nv21, ySize, bulkCopySize)
+
+            if (bulkCopySize < uvSize) {
+                uBuffer.position(bulkCopySize - 1)
+                nv21[ySize + uvSize - 1] = uBuffer.get()
+            }
+        } else if (uvPixelStride == 2) {
+            vBuffer.rewind()
+            for (row in 0 until uvHeight) {
+                val srcOffset = row * uvRowStride
+                val dstOffset = ySize + row * width
+                val bytesToCopy = minOf(width, vCapacity - srcOffset)
+                if (bytesToCopy > 0) {
+                    vBuffer.position(srcOffset)
+                    vBuffer.get(nv21, dstOffset, bytesToCopy)
                 }
-
-            val uri = saveJpegToStorage(finalBytes)
-
-            val saveCompleteTime = System.currentTimeMillis()
-            val shutterLatency = shutterTimestamp - captureStartTimestamp
-            val saveLatency = saveCompleteTime - shutterTimestamp
-            val totalLatency = saveCompleteTime - captureStartTimestamp
-            val modeName = if (bwMode) "BW" else "JPG"
-            Log.d(TAG, "Benchmark [$modeName]: shutter=${shutterLatency}ms, save=${saveLatency}ms, total=${totalLatency}ms")
-
-            synchronized(captureLock) {
-                pendingCaptureCount--
             }
-
-            withContext(Dispatchers.Main) {
-                onBenchmarkCallback?.invoke(shutterLatency, saveLatency)
-                onCompleteCallback?.invoke(uri)
+            if (uvSize > 0 && vCapacity < uvSize) {
+                uBuffer.position(vCapacity - 1)
+                nv21[ySize + uvSize - 1] = uBuffer.get()
+            }
+        } else {
+            val uvWidth = width / 2
+            for (row in 0 until uvHeight) {
+                for (col in 0 until uvWidth) {
+                    val uvIndex = row * uvRowStride + col
+                    nv21[ySize + row * width + col * 2] = vBuffer.get(uvIndex)
+                    nv21[ySize + row * width + col * 2 + 1] = uBuffer.get(uvIndex)
+                }
             }
         }
     }
@@ -1204,31 +1258,6 @@ class CameraController(
             GrayscaleConverter.toGrayscale(bitmap, recycleSource = true)
         } else {
             bitmap
-        }
-    }
-
-    private fun convertToGrayscaleJpeg(jpegBytes: ByteArray): ByteArray {
-        return try {
-            val decodeOptions =
-                BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-            val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions) ?: return jpegBytes
-
-            val grayscale = GrayscaleConverter.toGrayscale(original, recycleSource = true)
-
-            val outputStream = ByteArrayOutputStream()
-            val success = grayscale.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-            grayscale.recycle()
-
-            if (success && outputStream.size() > 0) {
-                outputStream.toByteArray()
-            } else {
-                jpegBytes
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Grayscale conversion failed", e)
-            jpegBytes
         }
     }
 
@@ -1699,8 +1728,6 @@ class CameraController(
             captureSession = null
             cameraDevice?.close()
             cameraDevice = null
-            jpegImageReader?.close()
-            jpegImageReader = null
             rawImageReader?.close()
             rawImageReader = null
             thumbnailImageReader?.close()
@@ -1717,6 +1744,7 @@ class CameraController(
 
         stopBackgroundThread()
         coroutineScope.cancel()
+        conversionExecutor.shutdown()
 
         synchronized(captureLock) {
             if (pendingCaptureCount > 0) {
