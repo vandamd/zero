@@ -20,8 +20,8 @@ android {
         applicationId = "com.vandam.zero"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.2.4"
+        versionCode = 8
+        versionName = "1.2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
