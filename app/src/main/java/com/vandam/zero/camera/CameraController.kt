@@ -62,6 +62,8 @@ class CameraController(
     private var zslEnabled: Boolean = false
 
     @Volatile private var latestZslImage: Image? = null
+
+    @Volatile private var latestZslRotation: Int = Surface.ROTATION_0
     private val zslLock = Object()
 
     private var pendingRawImage: Image? = null
@@ -327,6 +329,7 @@ class CameraController(
                             synchronized(zslLock) {
                                 latestZslImage?.close()
                                 latestZslImage = reader.acquireLatestImage()
+                                latestZslRotation = currentRotation
                             }
                         } else if (pendingVanillaJpegCapture) {
                             pendingVanillaJpegCapture = false
@@ -864,9 +867,11 @@ class CameraController(
 
     private fun takeZslPhoto() {
         val image: Image?
+        val imageRotation: Int
 
         synchronized(zslLock) {
             image = latestZslImage
+            imageRotation = latestZslRotation
             latestZslImage = null
         }
 
@@ -874,14 +879,15 @@ class CameraController(
             Log.w(TAG, "ZSL: No image available in buffer, waiting...")
             coroutineScope.launch(Dispatchers.IO) {
                 delay(100)
-                val retryImage =
-                    synchronized(zslLock) {
-                        val img = latestZslImage
-                        latestZslImage = null
-                        img
-                    }
+                var retryImage: Image? = null
+                var retryRotation: Int = currentRotation
+                synchronized(zslLock) {
+                    retryImage = latestZslImage
+                    retryRotation = latestZslRotation
+                    latestZslImage = null
+                }
                 if (retryImage != null) {
-                    processZslCapture(retryImage)
+                    processZslCapture(retryImage!!, retryRotation)
                 } else {
                     Log.e(TAG, "ZSL: Still no image after retry")
                     synchronized(captureLock) { pendingCaptureCount-- }
@@ -893,10 +899,15 @@ class CameraController(
             return
         }
 
-        processZslCapture(image)
+        processZslCapture(image, imageRotation)
     }
 
-    private fun processZslCapture(image: Image) {
+    private fun processZslCapture(
+        image: Image,
+        imageRotation: Int,
+    ) {
+        capturedRotation = imageRotation
+        Log.d(TAG, "ZSL capture using imageRotation=$imageRotation (currentRotation=$currentRotation)")
         shutterTimestamp = System.currentTimeMillis()
         val bufferGrabLatency = shutterTimestamp - captureStartTimestamp
 
@@ -1369,7 +1380,9 @@ class CameraController(
             try {
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     val dngCreator = DngCreator(chars, captureResult)
-                    dngCreator.setOrientation(getExifOrientation())
+                    val exifOrientation = getExifOrientation()
+                    Log.d(TAG, "DNG orientation: exifOrientation=$exifOrientation")
+                    dngCreator.setOrientation(exifOrientation)
 
                     if (previewBitmap != null) {
                         val thumbnailBitmap = scaleBitmapForThumbnail(previewBitmap)
@@ -1486,6 +1499,7 @@ class CameraController(
             synchronized(zslLock) {
                 latestZslImage?.close()
                 latestZslImage = null
+                latestZslRotation = currentRotation
             }
             zslEnabled = false
         }
@@ -1745,6 +1759,7 @@ class CameraController(
             synchronized(zslLock) {
                 latestZslImage?.close()
                 latestZslImage = null
+                latestZslRotation = currentRotation
             }
             zslEnabled = false
 
