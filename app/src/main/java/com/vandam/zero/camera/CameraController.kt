@@ -43,6 +43,8 @@ class CameraController(
         private const val HYPERFOCAL_DIOPTERS = 0.45f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
 
+        private const val THUMBNAIL_MAX_DIMENSION = 256
+
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
     }
@@ -55,11 +57,16 @@ class CameraController(
     private var jpegImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
     private var zslImageReader: ImageReader? = null
+    private var thumbnailImageReader: ImageReader? = null
 
     private var zslEnabled: Boolean = false
 
     @Volatile private var latestZslImage: Image? = null
     private val zslLock = Object()
+
+    private var pendingRawImage: Image? = null
+    private var pendingThumbnailImage: Image? = null
+    private val rawCaptureLock = Object()
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
@@ -276,6 +283,8 @@ class CameraController(
                     }, backgroundHandler)
                 }
 
+        val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
+
         if (supportsRaw) {
             val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
             val rawSize = rawSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
@@ -292,13 +301,30 @@ class CameraController(
                         setOnImageAvailableListener({ reader ->
                             val image = reader.acquireLatestImage()
                             if (image != null) {
-                                handleRawCapture(image)
+                                handleRawImageAvailable(image)
+                            }
+                        }, backgroundHandler)
+                    }
+
+            val previewYuvSize = choosePreviewYuvSize(yuvSizes, rawSize)
+            Log.d(TAG, "RAW preview YUV size: ${previewYuvSize.width}x${previewYuvSize.height}")
+
+            thumbnailImageReader =
+                ImageReader
+                    .newInstance(
+                        previewYuvSize.width,
+                        previewYuvSize.height,
+                        ImageFormat.YUV_420_888,
+                        2,
+                    ).apply {
+                        setOnImageAvailableListener({ reader ->
+                            val image = reader.acquireLatestImage()
+                            if (image != null) {
+                                handleThumbnailImageAvailable(image)
                             }
                         }, backgroundHandler)
                     }
         }
-
-        val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
         val zslSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: jpegSize
         Log.d(TAG, "ZSL (YUV) capture size: ${zslSize.width}x${zslSize.height}")
 
@@ -327,6 +353,28 @@ class CameraController(
         Log.d(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
     }
 
+    private fun choosePreviewYuvSize(
+        yuvSizes: Array<Size>?,
+        rawSize: Size,
+    ): Size {
+        if (yuvSizes == null || yuvSizes.isEmpty()) return Size(1280, 960)
+
+        val rawAspect = rawSize.width.toDouble() / rawSize.height
+        val tolerance = 0.1
+        val targetWidth = 1280
+
+        val suitable =
+            yuvSizes
+                .filter { size ->
+                    val aspect = size.width.toDouble() / size.height
+                    kotlin.math.abs(aspect - rawAspect) < tolerance
+                }.minByOrNull { kotlin.math.abs(it.width - targetWidth) }
+
+        return suitable
+            ?: yuvSizes.minByOrNull { kotlin.math.abs(it.width - targetWidth) }
+            ?: Size(1280, 960)
+    }
+
     private fun chooseOptimalPreviewSize(
         choices: Array<Size>?,
         targetWidth: Int,
@@ -342,7 +390,7 @@ class CameraController(
             choices
                 .filter { size ->
                     val ratio = size.width.toDouble() / size.height.toDouble()
-                    Math.abs(ratio - targetRatio) < tolerance && size.width <= idealWidth
+                    kotlin.math.abs(ratio - targetRatio) < tolerance && size.width <= idealWidth
                 }.sortedByDescending { it.width * it.height }
 
         return suitable.firstOrNull() ?: choices.maxByOrNull { it.width * it.height } ?: Size(1440, 1080)
@@ -385,12 +433,13 @@ class CameraController(
         surfaces.add(previewSurface!!)
         jpegImageReader?.surface?.let { surfaces.add(it) }
         rawImageReader?.surface?.let { surfaces.add(it) }
+        thumbnailImageReader?.surface?.let { surfaces.add(it) }
 
         if (fastMode) {
             zslImageReader?.surface?.let { surfaces.add(it) }
-            Log.d(TAG, "Session config: Preview + JPEG + RAW + ZSL(YUV) [fast mode]")
+            Log.d(TAG, "Session config: Preview + JPEG + RAW + Thumbnail + ZSL(YUV) [fast mode]")
         } else {
-            Log.d(TAG, "Session config: Preview + JPEG + RAW [normal mode]")
+            Log.d(TAG, "Session config: Preview + JPEG + RAW + Thumbnail [normal mode]")
         }
 
         try {
@@ -613,10 +662,18 @@ class CameraController(
         targetSurface: Surface,
         onComplete: (Uri?) -> Unit,
     ) {
+        synchronized(rawCaptureLock) {
+            pendingRawImage?.close()
+            pendingRawImage = null
+            pendingThumbnailImage?.close()
+            pendingThumbnailImage = null
+        }
+
         try {
             val captureBuilder =
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(targetSurface)
+                    thumbnailImageReader?.surface?.let { addTarget(it) }
                     applyCommonSettings(this)
 
                     // Override flash settings for capture
@@ -1026,10 +1083,40 @@ class CameraController(
         }
     }
 
-    private fun handleRawCapture(image: Image) {
+    private fun handleRawImageAvailable(image: Image) {
+        synchronized(rawCaptureLock) {
+            pendingRawImage = image
+            checkAndProcessRawCapture()
+        }
+    }
+
+    private fun handleThumbnailImageAvailable(image: Image) {
+        synchronized(rawCaptureLock) {
+            pendingThumbnailImage = image
+            checkAndProcessRawCapture()
+        }
+    }
+
+    private fun checkAndProcessRawCapture() {
+        val rawImage = pendingRawImage ?: return
+        val thumbnailImage = pendingThumbnailImage ?: return
+
+        pendingRawImage = null
+        pendingThumbnailImage = null
+
+        processRawWithThumbnail(rawImage, thumbnailImage)
+    }
+
+    private fun processRawWithThumbnail(
+        rawImage: Image,
+        previewYuvImage: Image,
+    ) {
         coroutineScope.launch(Dispatchers.IO) {
+            val previewBitmap = extractPreviewFromYuv(previewYuvImage)
+            previewYuvImage.close()
+
             withContext(Dispatchers.Main) {
-                onPreviewReadyCallback?.invoke(null)
+                onPreviewReadyCallback?.invoke(previewBitmap)
             }
 
             var attempts = 0
@@ -1040,7 +1127,7 @@ class CameraController(
 
             if (lastCaptureResult == null) {
                 Log.e(TAG, "Timeout waiting for capture result for DNG")
-                image.close()
+                rawImage.close()
                 synchronized(captureLock) { pendingCaptureCount-- }
                 withContext(Dispatchers.Main) {
                     onCompleteCallback?.invoke(null)
@@ -1048,8 +1135,8 @@ class CameraController(
                 return@launch
             }
 
-            val uri = saveDngToStorage(image)
-            image.close()
+            val uri = saveDngToStorage(rawImage, previewBitmap)
+            rawImage.close()
 
             val saveCompleteTime = System.currentTimeMillis()
             val shutterLatency = shutterTimestamp - captureStartTimestamp
@@ -1066,6 +1153,34 @@ class CameraController(
                 onCompleteCallback?.invoke(uri)
             }
         }
+    }
+
+    private fun extractPreviewFromYuv(yuvImage: Image): Bitmap? {
+        val yuvBytes = yuv420ToNv21(yuvImage)
+        val yuvImageWrapper =
+            android.graphics.YuvImage(
+                yuvBytes,
+                android.graphics.ImageFormat.NV21,
+                yuvImage.width,
+                yuvImage.height,
+                null,
+            )
+
+        val outputStream = ByteArrayOutputStream()
+        yuvImageWrapper.compressToJpeg(
+            android.graphics.Rect(0, 0, yuvImage.width, yuvImage.height),
+            90,
+            outputStream,
+        )
+        val jpegBytes = outputStream.toByteArray()
+
+        var bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+
+        if ((bwMode || monoFlavor) && bitmap != null) {
+            bitmap = GrayscaleConverter.toGrayscale(bitmap, recycleSource = true)
+        }
+
+        return bitmap
     }
 
     private fun extractPreviewBitmap(jpegBytes: ByteArray): Bitmap? {
@@ -1164,18 +1279,12 @@ class CameraController(
         return uri
     }
 
-    private fun saveDngToStorage(image: Image): Uri? {
-        val chars =
-            cameraCharacteristics ?: run {
-                Log.e(TAG, "saveDngToStorage: cameraCharacteristics is null")
-                return null
-            }
-
-        val captureResult =
-            lastCaptureResult ?: run {
-                Log.e(TAG, "saveDngToStorage: lastCaptureResult is null")
-                return null
-            }
+    private fun saveDngToStorage(
+        rawImage: Image,
+        previewBitmap: Bitmap?,
+    ): Uri? {
+        val chars = cameraCharacteristics ?: return null
+        val captureResult = lastCaptureResult ?: return null
 
         val name =
             SimpleDateFormat(FILENAME_FORMAT, Locale.US)
@@ -1201,7 +1310,17 @@ class CameraController(
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     val dngCreator = DngCreator(chars, captureResult)
                     dngCreator.setOrientation(getExifOrientation())
-                    dngCreator.writeImage(outputStream, image)
+
+                    if (previewBitmap != null) {
+                        val thumbnailBitmap = scaleBitmapForThumbnail(previewBitmap)
+                        dngCreator.setThumbnail(thumbnailBitmap)
+                        Log.d(TAG, "Embedded thumbnail: ${thumbnailBitmap.width}x${thumbnailBitmap.height}")
+                        if (thumbnailBitmap !== previewBitmap) {
+                            thumbnailBitmap.recycle()
+                        }
+                    }
+
+                    dngCreator.writeImage(outputStream, rawImage)
                     dngCreator.close()
                 }
                 Log.d(TAG, "DNG saved successfully: $uri")
@@ -1217,6 +1336,23 @@ class CameraController(
         }
 
         return uri
+    }
+
+    private fun scaleBitmapForThumbnail(bitmap: Bitmap): Bitmap {
+        val maxDim = THUMBNAIL_MAX_DIMENSION
+        if (bitmap.width <= maxDim && bitmap.height <= maxDim) return bitmap
+
+        val scale =
+            if (bitmap.width >= bitmap.height) {
+                maxDim.toFloat() / bitmap.width
+            } else {
+                maxDim.toFloat() / bitmap.height
+            }
+
+        val newWidth = (bitmap.width * scale).toInt()
+        val newHeight = (bitmap.height * scale).toInt()
+
+        return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
     }
 
     private fun getJpegOrientation(): Int {
@@ -1552,6 +1688,13 @@ class CameraController(
             }
             zslEnabled = false
 
+            synchronized(rawCaptureLock) {
+                pendingRawImage?.close()
+                pendingRawImage = null
+                pendingThumbnailImage?.close()
+                pendingThumbnailImage = null
+            }
+
             captureSession?.close()
             captureSession = null
             cameraDevice?.close()
@@ -1560,6 +1703,8 @@ class CameraController(
             jpegImageReader = null
             rawImageReader?.close()
             rawImageReader = null
+            thumbnailImageReader?.close()
+            thumbnailImageReader = null
             zslImageReader?.close()
             zslImageReader = null
             previewSurface?.release()

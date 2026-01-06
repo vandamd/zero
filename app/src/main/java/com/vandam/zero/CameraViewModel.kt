@@ -694,8 +694,8 @@ class CameraViewModel : ViewModel() {
                     }
                 },
                 onComplete = { uri ->
-                    if (uri != null && _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) {
-                        if (_previewEnabled.value) {
+                    if (_outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) {
+                        if (uri != null && _previewEnabled.value && _capturedImageBitmap.value == null) {
                             val thumbnail = extractDngThumbnail(uri)
                             if (thumbnail != null) {
                                 _capturedImageIsPortrait.value = thumbnail.height > thumbnail.width
