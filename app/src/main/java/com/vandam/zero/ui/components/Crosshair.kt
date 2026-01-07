@@ -8,6 +8,33 @@ import androidx.compose.ui.geometry.Offset
 import com.vandam.zero.ui.theme.CameraColors
 import com.vandam.zero.ui.theme.CameraDimens
 
+@Composable
+fun MeterCrosshair(modifier: Modifier = Modifier) {
+    Canvas(
+        modifier = modifier.size(CameraDimens.meterCrosshairSize),
+    ) {
+        val strokeWidth = CameraDimens.crosshairStrokeWidth
+        val color = CameraColors.overlay
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+        val armLength = size.width / 3f
+
+        drawLine(
+            color = color,
+            start = Offset(centerX - armLength, centerY),
+            end = Offset(centerX + armLength, centerY),
+            strokeWidth = strokeWidth,
+        )
+
+        drawLine(
+            color = color,
+            start = Offset(centerX, centerY - armLength),
+            end = Offset(centerX, centerY + armLength),
+            strokeWidth = strokeWidth,
+        )
+    }
+}
+
 /**
  * A crosshair overlay that displays a rectangular focus indicator with notches.
  * Used to show the current focus point on the camera preview.

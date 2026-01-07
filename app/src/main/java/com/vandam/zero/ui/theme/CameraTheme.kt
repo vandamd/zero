@@ -60,6 +60,7 @@ object CameraDimens {
 
     // Crosshair
     val crosshairSize = 80.dp
+    val meterCrosshairSize = 40.dp
     val crosshairStrokeWidth = 2f
     val crosshairNotchLength = 10f
 

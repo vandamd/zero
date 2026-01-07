@@ -62,6 +62,14 @@ class MainActivity : ComponentActivity() {
                 true
             }
 
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                if (event?.repeatCount == 0) {
+                    Log.d("ZeroKeys", "Volume Up Pressed - Start Metering")
+                    viewModel.onMeterButtonPress()
+                }
+                true
+            }
+
             else -> {
                 super.onKeyDown(keyCode, event)
             }
@@ -76,6 +84,12 @@ class MainActivity : ComponentActivity() {
         return when (keyCode) {
             KeyEvent.KEYCODE_FOCUS -> {
                 viewModel.onFocusButtonRelease()
+                true
+            }
+
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                Log.d("ZeroKeys", "Volume Up Released - Stop Metering")
+                viewModel.onMeterButtonRelease()
                 true
             }
 

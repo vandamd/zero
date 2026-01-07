@@ -1684,6 +1684,66 @@ class CameraController(
         }
     }
 
+    fun setCenterSpotMetering(
+        enable: Boolean,
+        tempEv: Float? = null,
+    ) {
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+        val characteristics = cameraCharacteristics ?: return
+
+        val maxAeRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+        if (maxAeRegions == 0) {
+            Log.d(TAG, "Device doesn't support AE regions")
+            return
+        }
+
+        try {
+            if (enable) {
+                val sensorRect =
+                    characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                        ?: return
+
+                val spotSize = minOf(sensorRect.width(), sensorRect.height()) / 40
+                val centerX = sensorRect.width() / 2
+                val centerY = sensorRect.height() / 2
+
+                val left = centerX - spotSize
+                val top = centerY - spotSize
+                val right = centerX + spotSize
+                val bottom = centerY + spotSize
+
+                val meteringRegion =
+                    MeteringRectangle(
+                        android.graphics.Rect(left, top, right, bottom),
+                        MeteringRectangle.METERING_WEIGHT_MAX,
+                    )
+
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRegion))
+                Log.d(TAG, "Center spot metering enabled (${spotSize * 2}px region)")
+            } else {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
+                Log.d(TAG, "Center spot metering disabled")
+            }
+
+            if (tempEv != null && autoExposure) {
+                val step = exposureCompensationStep
+                val tempEc =
+                    (tempEv / step).toInt().coerceIn(
+                        exposureCompensationRange?.lower ?: -12,
+                        exposureCompensationRange?.upper ?: 12,
+                    )
+                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, tempEc)
+                Log.d(TAG, "Temporary EV set to $tempEv (index: $tempEc)")
+            }
+
+            session.capture(builder.build(), null, backgroundHandler)
+            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Error setting center spot metering", e)
+        }
+    }
+
     // ===================
     // PREVIEW GRAYSCALE
     // ===================

@@ -101,6 +101,9 @@ class CameraViewModel : ViewModel() {
     private val _isCapturing = MutableStateFlow(false)
     val isCapturing: StateFlow<Boolean> = _isCapturing
 
+    private val _isMetering = MutableStateFlow(false)
+    val isMetering: StateFlow<Boolean> = _isMetering
+
     private val _capturedImageUri = MutableStateFlow<Uri?>(null)
     val capturedImageUri: StateFlow<Uri?> = _capturedImageUri
 
@@ -326,6 +329,28 @@ class CameraViewModel : ViewModel() {
         _exposureValue.value = ev.coerceIn(-2f, 2f)
         cameraController?.setExposureCompensation(ev)
         saveSettings()
+    }
+
+    private var savedEvForMetering: Float = 0f
+
+    fun onMeterButtonPress() {
+        if (_exposureMode.value != ExposureMode.AUTO) return
+        if (_isMetering.value) return
+
+        val currentEv = _exposureValue.value
+        if (currentEv == 0f) return
+
+        _isMetering.value = true
+        savedEvForMetering = currentEv
+        cameraController?.setCenterSpotMetering(true, tempEv = 0f)
+    }
+
+    fun onMeterButtonRelease() {
+        if (!_isMetering.value) return
+
+        val evToRestore = savedEvForMetering
+        _isMetering.value = false
+        cameraController?.setCenterSpotMetering(false, tempEv = evToRestore)
     }
 
     fun setIsoValue(iso: Int) {
@@ -648,7 +673,7 @@ class CameraViewModel : ViewModel() {
     fun onShutterButtonPress() {
         val controller = cameraController ?: return
 
-        if (controller.hasPendingCaptures()) {
+        if (controller.hasPendingCaptures() || _isMetering.value) {
             return
         }
 
@@ -714,6 +739,7 @@ class CameraViewModel : ViewModel() {
 
     fun onFocusButtonPress() {
         if (_isFastMode.value) return
+        if (_isMetering.value) return
 
         _isFocusButtonHeld.value = true
 
@@ -751,6 +777,7 @@ class CameraViewModel : ViewModel() {
         height: Float,
     ) {
         if (_isFastMode.value) return
+        if (_isMetering.value) return
         lastFocusPoint = Pair(x, y)
         lastFocusTimestamp = System.currentTimeMillis()
         showCrosshair(x, y)

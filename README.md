@@ -38,6 +38,9 @@ I recommend using [Obtainium](https://github.com/ImranR98/Obtainium) and adding 
 - **HF** - Hyperfocal mode for street photography. Instant shutter with focus locked at 2.2m (sharp from ~1.1m to infinity). No flash.
 - **RAW** - Unprocessed DNG files
 
+## Auto Mode Exposure
+When exposure compensation is set to a non-zero value, exposure is locked to when it was set. Press the volume up button to re-meter the scene (exposure will briefly reset to 0, meter, then reapply your compensation value).
+
 ## Key Mapper
 
 If you use Key Mapper, I recommend setting a trigger to open Zero when the camera button is pressed. Don't forget to add a constraint so it only works when Zero is not in the foreground!

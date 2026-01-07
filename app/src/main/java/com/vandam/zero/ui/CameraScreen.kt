@@ -62,6 +62,7 @@ import com.vandam.zero.ui.components.Crosshair
 import com.vandam.zero.ui.components.ExposureSlider
 import com.vandam.zero.ui.components.GridOverlay
 import com.vandam.zero.ui.components.IsoSlider
+import com.vandam.zero.ui.components.MeterCrosshair
 import com.vandam.zero.ui.components.ShutterSpeedSlider
 import com.vandam.zero.ui.components.formatShutterSpeed
 import com.vandam.zero.ui.components.rotateVertically
@@ -178,6 +179,7 @@ private data class CameraUiState(
     val isFastMode: Boolean,
     val cameraHidden: Boolean,
     val redTextMode: Boolean,
+    val isMetering: Boolean,
 ) {
     val isBusy: Boolean get() = isCapturing || isSaving
     val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
@@ -216,6 +218,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val isFastMode by viewModel.isFastMode.collectAsState()
     val cameraHidden by viewModel.cameraHidden.collectAsState()
     val redTextMode by viewModel.redTextMode.collectAsState()
+    val isMetering by viewModel.isMetering.collectAsState()
 
     return CameraUiState(
         showFlash = showFlash,
@@ -241,6 +244,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         isFastMode = isFastMode,
         cameraHidden = cameraHidden,
         redTextMode = redTextMode,
+        isMetering = isMetering,
     )
 }
 
@@ -627,6 +631,15 @@ private fun CameraPreviewArea(
         if (!uiState.showFlash && !uiState.cameraHidden) {
             CrosshairOverlay(crosshairPosition = uiState.crosshairPosition)
 
+            if (uiState.isMetering) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MeterCrosshair()
+                }
+            }
+
             if (uiState.gridEnabled) {
                 GridOverlay()
             }
@@ -850,6 +863,7 @@ private fun StatusPanel(
         Text(
             text =
                 when {
+                    uiState.isMetering -> "METERING"
                     uiState.isCapturing -> "HOLD"
                     uiState.isSaving -> "SAVING"
                     else -> "READY"
