@@ -137,11 +137,13 @@ private fun CameraContent(viewModel: CameraViewModel) {
 
     CompositionLocalProvider(LocalDensity provides fixedDensity) {
         Row(modifier = Modifier.fillMaxSize()) {
-            LeftToolbar(
-                uiState = uiState,
-                viewModel = viewModel,
-                haptic = haptic,
-            )
+            if (!uiState.uiHidden) {
+                LeftToolbar(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    haptic = haptic,
+                )
+            }
 
             CameraPreviewArea(
                 uiState = uiState,
@@ -178,6 +180,7 @@ private data class CameraUiState(
     val capturedImageIsPortrait: Boolean,
     val isFastMode: Boolean,
     val cameraHidden: Boolean,
+    val uiHidden: Boolean,
     val redTextMode: Boolean,
     val isMetering: Boolean,
 ) {
@@ -217,6 +220,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
     val isFastMode by viewModel.isFastMode.collectAsState()
     val cameraHidden by viewModel.cameraHidden.collectAsState()
+    val uiHidden by viewModel.uiHidden.collectAsState()
     val redTextMode by viewModel.redTextMode.collectAsState()
     val isMetering by viewModel.isMetering.collectAsState()
 
@@ -243,6 +247,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         capturedImageIsPortrait = capturedImageIsPortrait,
         isFastMode = isFastMode,
         cameraHidden = cameraHidden,
+        uiHidden = uiHidden,
         redTextMode = redTextMode,
         isMetering = isMetering,
     )
@@ -628,7 +633,7 @@ private fun CameraPreviewArea(
             viewModel = viewModel,
         )
 
-        if (!uiState.showFlash && !uiState.cameraHidden) {
+        if (!uiState.showFlash && !uiState.cameraHidden && !uiState.uiHidden) {
             CrosshairOverlay(crosshairPosition = uiState.crosshairPosition)
 
             if (uiState.isMetering) {
@@ -645,15 +650,17 @@ private fun CameraPreviewArea(
             }
         }
 
-        SliderPanel(
-            sliderMode = uiState.sliderMode,
-            exposureValue = uiState.exposureValue,
-            isoValue = uiState.isoValue,
-            shutterSpeedNs = uiState.shutterSpeedNs,
-            isoRange = uiState.isoRange,
-            shutterRange = uiState.shutterRange,
-            viewModel = viewModel,
-        )
+        if (!uiState.uiHidden) {
+            SliderPanel(
+                sliderMode = uiState.sliderMode,
+                exposureValue = uiState.exposureValue,
+                isoValue = uiState.isoValue,
+                shutterSpeedNs = uiState.shutterSpeedNs,
+                isoRange = uiState.isoRange,
+                shutterRange = uiState.shutterRange,
+                viewModel = viewModel,
+            )
+        }
 
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -662,6 +669,7 @@ private fun CameraPreviewArea(
             StatusPanel(
                 uiState = uiState,
                 viewModel = viewModel,
+                showStatusText = !uiState.uiHidden,
             )
         }
 
@@ -671,7 +679,7 @@ private fun CameraPreviewArea(
             onFlashComplete = { viewModel.resetShutterFlash() },
         )
 
-        if (uiState.previewEnabled) {
+        if (uiState.previewEnabled && !uiState.uiHidden) {
             CapturedImagePreview(
                 bitmap = uiState.capturedImageBitmap,
                 isPortrait = uiState.capturedImageIsPortrait,
@@ -679,11 +687,13 @@ private fun CameraPreviewArea(
             )
         }
 
-        CrosshairAutoHide(
-            crosshairPosition = uiState.crosshairPosition,
-            isFocusButtonHeld = uiState.isFocusButtonHeld,
-            onHide = { viewModel.hideCrosshair() },
-        )
+        if (!uiState.uiHidden) {
+            CrosshairAutoHide(
+                crosshairPosition = uiState.crosshairPosition,
+                isFocusButtonHeld = uiState.isFocusButtonHeld,
+                onHide = { viewModel.hideCrosshair() },
+            )
+        }
     }
 }
 
@@ -726,9 +736,9 @@ private fun CameraTextureView(
         modifier =
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = if (uiState.showFlash || uiState.cameraHidden) 0f else 1f }
-                .pointerInput(uiState.cameraHidden) {
-                    if (!uiState.cameraHidden) {
+                .graphicsLayer { alpha = if (uiState.showFlash || uiState.cameraHidden || uiState.uiHidden) 0f else 1f }
+                .pointerInput(uiState.cameraHidden, uiState.uiHidden) {
+                    if (!uiState.cameraHidden && !uiState.uiHidden) {
                         detectTapGestures { offset ->
                             viewModel.onTapToFocus(
                                 offset.x,
@@ -834,6 +844,7 @@ private fun StatusPanel(
     uiState: CameraUiState,
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier,
+    showStatusText: Boolean = true,
 ) {
     Column(
         modifier =
@@ -860,18 +871,20 @@ private fun StatusPanel(
             }
         }
 
-        Text(
-            text =
-                when {
-                    uiState.isMetering -> "METERING"
-                    uiState.isCapturing -> "HOLD"
-                    uiState.isSaving -> "SAVING"
-                    else -> "READY"
-                },
-            color = uiState.textColor,
-            style = CameraTypography.toolbarText,
-            modifier = Modifier.rotateVertically(clockwise = true),
-        )
+        if (showStatusText) {
+            Text(
+                text =
+                    when {
+                        uiState.isMetering -> "METERING"
+                        uiState.isCapturing -> "HOLD"
+                        uiState.isSaving -> "SAVING"
+                        else -> "READY"
+                    },
+                color = uiState.textColor,
+                style = CameraTypography.toolbarText,
+                modifier = Modifier.rotateVertically(clockwise = true),
+            )
+        }
     }
 }
 
