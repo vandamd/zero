@@ -737,8 +737,8 @@ private fun CameraTextureView(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer { alpha = if (uiState.showFlash || uiState.cameraHidden || uiState.uiHidden) 0f else 1f }
-                .pointerInput(uiState.cameraHidden) {
-                    if (!uiState.cameraHidden) {
+                .pointerInput(uiState.cameraHidden, uiState.uiHidden) {
+                    if (!uiState.cameraHidden && !uiState.uiHidden) {
                         detectTapGestures { offset ->
                             viewModel.onTapToFocus(
                                 offset.x,

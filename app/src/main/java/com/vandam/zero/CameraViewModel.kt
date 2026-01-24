@@ -266,6 +266,9 @@ class CameraViewModel : ViewModel() {
 
     fun toggleUiHidden() {
         _uiHidden.value = !_uiHidden.value
+        if (_uiHidden.value) {
+            _cameraHidden.value = false
+        }
         _toastMessage.value = if (_uiHidden.value) "UI OFF" else "UI ON"
         saveSettings()
     }
