@@ -3,6 +3,7 @@ package com.vandam.zero
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -66,6 +67,15 @@ class MainActivity : ComponentActivity() {
                 if (event?.repeatCount == 0) {
                     Log.d("ZeroKeys", "Volume Up Pressed - Start Metering")
                     viewModel.onMeterButtonPress()
+                }
+                true
+            }
+
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (event?.repeatCount == 0) {
+                    Log.d("ZeroKeys", "Volume Down Pressed - Toggle UI")
+                    window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    viewModel.toggleUiHidden()
                 }
                 true
             }

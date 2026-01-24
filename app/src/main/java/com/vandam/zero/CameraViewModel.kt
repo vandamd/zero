@@ -95,6 +95,9 @@ class CameraViewModel : ViewModel() {
     private val _oisEnabled = MutableStateFlow(true)
     val oisEnabled: StateFlow<Boolean> = _oisEnabled
 
+    private val _uiHidden = MutableStateFlow(false)
+    val uiHidden: StateFlow<Boolean> = _uiHidden
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
 
@@ -239,6 +242,7 @@ class CameraViewModel : ViewModel() {
     fun toggleCameraHidden() {
         _cameraHidden.value = !_cameraHidden.value
         _toastMessage.value = if (_cameraHidden.value) "VIEWFINDER OFF" else "VIEWFINDER ON"
+        saveSettings()
     }
 
     fun toggleRedTextMode(): Boolean {
@@ -257,6 +261,12 @@ class CameraViewModel : ViewModel() {
         _oisEnabled.value = !_oisEnabled.value
         cameraController?.setOisEnabled(_oisEnabled.value)
         _toastMessage.value = if (_oisEnabled.value) "OIS ON" else "OIS OFF"
+        saveSettings()
+    }
+
+    fun toggleUiHidden() {
+        _uiHidden.value = !_uiHidden.value
+        _toastMessage.value = if (_uiHidden.value) "UI OFF" else "UI ON"
         saveSettings()
     }
 
@@ -417,6 +427,14 @@ class CameraViewModel : ViewModel() {
             _isFastMode.value = p.getBoolean("fast_mode", false)
             _redTextMode.value = p.getBoolean("red_text_mode", false)
             _oisEnabled.value = p.getBoolean("ois_enabled", true)
+            _uiHidden.value = p.getBoolean("ui_hidden", false)
+            _cameraHidden.value = p.getBoolean("camera_hidden", false)
+            if (_uiHidden.value) {
+                _toastMessage.value = "UI OFF"
+            }
+            if (_cameraHidden.value) {
+                _toastMessage.value = "VIEWFINDER OFF"
+            }
         }
     }
 
@@ -435,6 +453,8 @@ class CameraViewModel : ViewModel() {
             putBoolean("fast_mode", _isFastMode.value)
             putBoolean("red_text_mode", _redTextMode.value)
             putBoolean("ois_enabled", _oisEnabled.value)
+            putBoolean("ui_hidden", _uiHidden.value)
+            putBoolean("camera_hidden", _cameraHidden.value)
             apply()
         }
     }
