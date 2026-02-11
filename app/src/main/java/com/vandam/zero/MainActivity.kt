@@ -18,6 +18,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: CameraViewModel by viewModels()
     private var wasGrayscaleEnabled = false
     private var previousDaltonizerMode = 0
+    private var didWeDisableDaltonizer = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +39,7 @@ class MainActivity : ComponentActivity() {
         if (viewModel.hasPendingCaptures()) {
             Log.w("ZeroLifecycle", "Activity pausing with pending captures!")
         }
+        restoreDaltonizer()
         super.onPause()
     }
 
@@ -152,58 +154,53 @@ class MainActivity : ComponentActivity() {
         Log.d("ZeroColorFilter", "Night display: ${nightDisplayEnabled == 1}")
     }
 
-    private fun disableGrayscale() {
+    private fun disableDaltonizer() {
         val daltonizerEnabled =
             Settings.Secure.getInt(
                 contentResolver,
                 "accessibility_display_daltonizer_enabled",
                 0,
             )
-        val daltonizerMode =
-            Settings.Secure.getInt(
-                contentResolver,
-                "accessibility_display_daltonizer",
-                0,
-            )
 
-        // Store if daltonizer was enabled at all (any mode)
-        wasGrayscaleEnabled = daltonizerEnabled == 1
-        previousDaltonizerMode = daltonizerMode
+        if (daltonizerEnabled == 1) {
+            val daltonizerMode =
+                Settings.Secure.getInt(
+                    contentResolver,
+                    "accessibility_display_daltonizer",
+                    0,
+                )
 
-        if (wasGrayscaleEnabled) {
+            wasGrayscaleEnabled = true
+            previousDaltonizerMode = daltonizerMode
+            didWeDisableDaltonizer = true
+
             try {
                 Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer_enabled", 0)
-                Log.d("ZeroColorFilter", "Daltonizer disabled on app start (was mode: $daltonizerMode)")
+                Log.d("ZeroColorFilter", "Daltonizer disabled (was mode: $daltonizerMode)")
             } catch (e: SecurityException) {
                 Log.e(
                     "ZeroColorFilter",
-                    "No permission to change settings. Run: adb shell pm grant com.vandam.zero android.permission.WRITE_SECURE_SETTINGS",
+                    "No permission - run: adb shell pm grant com.vandam.zero android.permission.WRITE_SECURE_SETTINGS",
                 )
             }
-        } else {
-            Log.d("ZeroColorFilter", "Daltonizer was not enabled, nothing to disable")
         }
     }
 
-    private fun restoreGrayscale() {
-        if (wasGrayscaleEnabled) {
+    private fun restoreDaltonizer() {
+        if (didWeDisableDaltonizer && wasGrayscaleEnabled) {
             try {
                 Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer", previousDaltonizerMode)
                 Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer_enabled", 1)
-                Log.d("ZeroColorFilter", "Daltonizer restored on app exit (mode: $previousDaltonizerMode)")
+                Log.d("ZeroColorFilter", "Daltonizer restored (mode: $previousDaltonizerMode)")
             } catch (e: SecurityException) {
                 Log.e("ZeroColorFilter", "No permission to restore settings")
             }
+            didWeDisableDaltonizer = false
         }
     }
 
-    override fun onStop() {
-        restoreGrayscale()
-        super.onStop()
-    }
-
-    override fun onStart() {
-        super.onStart()
-        disableGrayscale()
+    override fun onResume() {
+        super.onResume()
+        disableDaltonizer()
     }
 }
