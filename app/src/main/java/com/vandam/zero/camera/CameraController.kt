@@ -14,6 +14,7 @@ import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
+import android.media.MediaCodec
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -30,6 +31,7 @@ import android.widget.Toast
 import com.vandam.zero.BuildConfig
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -102,6 +104,7 @@ class CameraController(
     private var supportsVideoStabilization: Boolean = false
     private var mediaRecorder: MediaRecorder? = null
     private var recorderSurface: Surface? = null
+    private var captureSessionIncludesRecorderSurface: Boolean = false
     private var videoOutputUri: Uri? = null
     private var videoOutputFileDescriptor: ParcelFileDescriptor? = null
     private var pendingVideoRecordingStart: Boolean = false
@@ -492,13 +495,78 @@ class CameraController(
             }
         }
 
-    private fun shouldIncludeRecorderSurface(): Boolean = captureMode == CaptureMode.VIDEO && recorderSurface != null
+    private fun shouldConfigureRecorderSurface(): Boolean = captureMode == CaptureMode.VIDEO && recorderSurface != null
+
+    private fun shouldTargetRecorderSurface(): Boolean =
+        shouldConfigureRecorderSurface() && (pendingVideoRecordingStart || isVideoRecording)
+
+    private fun ensureRecorderSurface(): Surface? {
+        recorderSurface?.let { return it }
+
+        val surface =
+            try {
+                MediaCodec.createPersistentInputSurface()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create persistent recorder surface", e)
+                return null
+            }
+
+        if (!preparePersistentRecorderSurface(surface)) {
+            runCatching { surface.release() }
+            return null
+        }
+
+        recorderSurface = surface
+        return surface
+    }
+
+    private fun preparePersistentRecorderSurface(surface: Surface): Boolean {
+        val outputFile =
+            try {
+                File.createTempFile("zero_recorder_surface", ".mp4", context.cacheDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create recorder surface temp file", e)
+                return false
+            }
+
+        val recorder = createMediaRecorder()
+
+        return try {
+            recorder.apply {
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setOutputFile(outputFile.absolutePath)
+                setVideoEncodingBitRate(getVideoEncodingBitRate(videoPreset))
+                setVideoFrameRate(videoPreset.fps)
+                setVideoSize(videoPreset.width, videoPreset.height)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setInputSurface(surface)
+                prepare()
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to prepare persistent recorder surface", e)
+            false
+        } finally {
+            runCatching { recorder.release() }
+            runCatching { outputFile.delete() }
+        }
+    }
+
+    private fun releaseRecorderSurface() {
+        runCatching {
+            recorderSurface?.release()
+        }
+        recorderSurface = null
+        captureSessionIncludesRecorderSurface = false
+    }
 
     private fun recreateCaptureSession() {
         Log.e(TAG, "RECREATE: closing existing session=$captureSession")
         previewRequestBuilder = null
         captureSession?.close()
         captureSession = null
+        captureSessionIncludesRecorderSurface = false
         Log.e(TAG, "RECREATE: creating new session")
         createCaptureSession()
     }
@@ -511,6 +579,12 @@ class CameraController(
         texture.setDefaultBufferSize(preview.width, preview.height)
         previewSurface?.release()
         previewSurface = Surface(texture)
+        val recorderSurfaceForSession =
+            if (captureMode == CaptureMode.VIDEO) {
+                ensureRecorderSurface()
+            } else {
+                null
+            }
 
         val surfaces = mutableListOf<Surface>()
         surfaces.add(previewSurface!!)
@@ -524,9 +598,9 @@ class CameraController(
             } else {
                 Log.e(TAG, "Session config: Preview + YUV + RAW + Thumbnail [normal mode]")
             }
-        } else if (shouldIncludeRecorderSurface()) {
-            recorderSurface?.let { surfaces.add(it) }
-            Log.e(TAG, "Session config: Preview + Recorder [video record]")
+        } else if (recorderSurfaceForSession != null) {
+            surfaces.add(recorderSurfaceForSession)
+            Log.e(TAG, "Session config: Preview + Recorder [video]")
         } else {
             Log.e(TAG, "Session config: Preview only [video idle]")
         }
@@ -543,10 +617,16 @@ class CameraController(
                         Log.e(TAG, "onConfigured: device=$cameraDevice, session=$session")
                         if (cameraDevice == null) return
                         captureSession = session
-                        try {
-                            startPreview()
-                        } catch (e: IllegalStateException) {
-                            Log.e(TAG, "Camera closed before preview started", e)
+                        captureSessionIncludesRecorderSurface = recorderSurfaceForSession != null
+                        if (!startPreview()) {
+                            if (pendingVideoRecordingStart) {
+                                pendingVideoRecordingStart = false
+                                releasePreparedVideoRecorder(deleteOutput = true)
+                                onVideoRecordingErrorCallback?.invoke("START FAIL")
+                                onVideoRecordingErrorCallback = null
+                                onVideoRecordingStartedCallback = null
+                            }
+                            notifyVideoStopReady()
                             return
                         }
 
@@ -561,6 +641,7 @@ class CameraController(
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Log.e(TAG, "onConfigureFailed: Capture session configuration failed")
+                        captureSessionIncludesRecorderSurface = false
                         if (pendingVideoRecordingStart) {
                             pendingVideoRecordingStart = false
                             releasePreparedVideoRecorder(deleteOutput = true)
@@ -592,15 +673,15 @@ class CameraController(
         }
     }
 
-    private fun startPreview() {
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val surface = previewSurface ?: return
+    private fun startPreview(): Boolean {
+        val camera = cameraDevice ?: return false
+        val session = captureSession ?: return false
+        val surface = previewSurface ?: return false
 
         try {
             if (captureMode == CaptureMode.VIDEO) {
                 val template =
-                    if (shouldIncludeRecorderSurface()) {
+                    if (shouldTargetRecorderSurface()) {
                         CameraDevice.TEMPLATE_RECORD
                     } else {
                         CameraDevice.TEMPLATE_PREVIEW
@@ -608,7 +689,7 @@ class CameraController(
                 previewRequestBuilder =
                     camera.createCaptureRequest(template).apply {
                         addTarget(surface)
-                        recorderSurface?.takeIf { shouldIncludeRecorderSurface() }?.let { addTarget(it) }
+                        recorderSurface?.takeIf { shouldTargetRecorderSurface() }?.let { addTarget(it) }
                         applyCommonSettings(this)
                     }
                 zslEnabled = false
@@ -634,12 +715,18 @@ class CameraController(
 
             session.setRepeatingRequest(previewRequestBuilder!!.build(), null, backgroundHandler)
 
-            if (captureMode == CaptureMode.VIDEO && pendingVideoRecordingStart && shouldIncludeRecorderSurface()) {
+            if (captureMode == CaptureMode.VIDEO && pendingVideoRecordingStart && shouldTargetRecorderSurface()) {
                 startPreparedVideoRecording()
             }
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error starting preview", e)
+            return false
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Capture session already closed while starting preview", e)
+            return false
         }
+
+        return true
     }
 
     /**
@@ -861,7 +948,9 @@ class CameraController(
         onVideoRecordingStartedCallback = onStarted
         onVideoRecordingErrorCallback = onError
         pendingVideoRecordingStart = true
-        recreateCaptureSession()
+        if (captureSession == null || !captureSessionIncludesRecorderSurface || !startPreview()) {
+            recreateCaptureSession()
+        }
     }
 
     fun stopVideoRecording(
@@ -882,8 +971,13 @@ class CameraController(
 
         coroutineScope.launch(Dispatchers.IO) {
             var savedUri = outputUri
+            var previewRestarted = false
 
             stopActiveRepeatingRequest()
+
+            if (cameraDevice != null && captureMode == CaptureMode.VIDEO && captureSessionIncludesRecorderSurface) {
+                previewRestarted = startPreview()
+            }
 
             if (recorder != null && wasRecording) {
                 try {
@@ -900,16 +994,29 @@ class CameraController(
             savedUri?.let { finalizePendingVideo(it) }
 
             if (cameraDevice != null && captureMode == CaptureMode.VIDEO) {
-                recreateCaptureSession()
+                if (captureSessionIncludesRecorderSurface && previewRestarted) {
+                    notifyVideoStopReady()
+                } else {
+                    recreateCaptureSession()
+                }
             } else {
                 notifyVideoStopReady()
             }
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun createMediaRecorder(): MediaRecorder =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(context)
+        } else {
+            MediaRecorder()
+        }
+
     private fun prepareMediaRecorderForRecording(): Boolean {
         releasePreparedVideoRecorder(deleteOutput = true)
 
+        val inputSurface = ensureRecorderSurface() ?: return false
         val outputUri = createPendingVideoUri() ?: return false
         val outputDescriptor =
             context.contentResolver.openFileDescriptor(outputUri, "rw") ?: run {
@@ -917,7 +1024,7 @@ class CameraController(
                 return false
             }
 
-        val recorder = MediaRecorder()
+        val recorder = createMediaRecorder()
 
         return try {
             recorder.apply {
@@ -933,12 +1040,12 @@ class CameraController(
                 setAudioSamplingRate(48_000)
                 setAudioChannels(1)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setInputSurface(inputSurface)
                 setOrientationHint(0)
                 prepare()
             }
 
             mediaRecorder = recorder
-            recorderSurface = recorder.surface
             videoOutputUri = outputUri
             videoOutputFileDescriptor = outputDescriptor
             true
@@ -1070,9 +1177,6 @@ class CameraController(
             mediaRecorder?.release()
         }
         runCatching {
-            recorderSurface?.release()
-        }
-        runCatching {
             videoOutputFileDescriptor?.close()
         }
 
@@ -1081,7 +1185,6 @@ class CameraController(
         }
 
         mediaRecorder = null
-        recorderSurface = null
         videoOutputFileDescriptor = null
         videoOutputUri = null
     }
@@ -2388,6 +2491,7 @@ class CameraController(
             zslImageReader = null
             previewSurface?.release()
             previewSurface = null
+            releaseRecorderSurface()
         } catch (e: InterruptedException) {
             Log.e(TAG, "Error during shutdown", e)
         } finally {
