@@ -568,6 +568,7 @@ class CameraController(
                             onVideoRecordingErrorCallback = null
                             onVideoRecordingStartedCallback = null
                         }
+                        notifyVideoStopReady()
                         postToast("Camera configuration failed")
                     }
                 }
@@ -768,6 +769,27 @@ class CameraController(
         }
     }
 
+    private fun stopActiveRepeatingRequest() {
+        val session = captureSession ?: return
+
+        try {
+            session.stopRepeating()
+            session.abortCaptures()
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Error stopping active capture request", e)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Capture session already closed while stopping active request", e)
+        }
+    }
+
+    private fun notifyVideoStopReady() {
+        val callback = onVideoStopReadyCallback ?: return
+        onVideoStopReadyCallback = null
+        coroutineScope.launch(Dispatchers.Main) {
+            callback()
+        }
+    }
+
     fun setCaptureMode(mode: CaptureMode) {
         if (captureMode == mode) return
 
@@ -846,6 +868,7 @@ class CameraController(
         onComplete: (Uri?) -> Unit = {},
         onReady: () -> Unit = {},
     ) {
+        val wasRecording = isVideoRecording
         pendingVideoRecordingStart = false
         isVideoRecording = false
         onVideoRecordingStartedCallback = null
@@ -859,33 +882,27 @@ class CameraController(
 
         coroutineScope.launch(Dispatchers.IO) {
             var savedUri = outputUri
-            if (recorder != null) {
+
+            stopActiveRepeatingRequest()
+
+            if (recorder != null && wasRecording) {
                 try {
                     recorder.stop()
                 } catch (e: RuntimeException) {
                     Log.e(TAG, "Failed to stop recorder cleanly", e)
                     savedUri = null
                 }
+            } else {
+                savedUri = null
             }
             releasePreparedVideoRecorder(deleteOutput = savedUri == null)
 
-            captureSession?.close()
-            captureSession = null
-            previewRequestBuilder = null
-            cameraDevice?.close()
-            cameraDevice = null
-
             savedUri?.let { finalizePendingVideo(it) }
 
-            try {
-                if (!cameraOpenCloseLock.tryAcquire(CAMERA_OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    Log.e(TAG, "Timeout waiting to re-open camera")
-                } else {
-                    cameraManager.openCamera(cameraId!!, stateCallback, backgroundHandler)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error re-opening camera", e)
-                cameraOpenCloseLock.release()
+            if (cameraDevice != null && captureMode == CaptureMode.VIDEO) {
+                recreateCaptureSession()
+            } else {
+                notifyVideoStopReady()
             }
         }
     }
@@ -1010,6 +1027,7 @@ class CameraController(
         var savedUri = outputUri
 
         try {
+            stopActiveRepeatingRequest()
             if (wasRecording) {
                 recorder.stop()
             } else {
