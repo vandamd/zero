@@ -16,6 +16,10 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.vandam.zero.ui.CameraScreen
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private const val SCROLLWHEEL_BUTTON_KEY_CODE = 319
+    }
+
     private val viewModel: CameraViewModel by viewModels()
     private var wasGrayscaleEnabled = false
     private var previousDaltonizerMode = 0
@@ -84,6 +88,15 @@ class MainActivity : ComponentActivity() {
                 true
             }
 
+            SCROLLWHEEL_BUTTON_KEY_CODE -> {
+                if (event?.repeatCount == 0) {
+                    Log.d("ZeroKeys", "Scrollwheel Pressed - Toggle Capture Mode")
+                    window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    viewModel.toggleCaptureMode()
+                }
+                true
+            }
+
             else -> {
                 super.onKeyDown(keyCode, event)
             }
@@ -104,6 +117,10 @@ class MainActivity : ComponentActivity() {
             KeyEvent.KEYCODE_VOLUME_UP -> {
                 Log.d("ZeroKeys", "Volume Up Released - Stop Metering")
                 viewModel.onMeterButtonRelease()
+                true
+            }
+
+            SCROLLWHEEL_BUTTON_KEY_CODE -> {
                 true
             }
 

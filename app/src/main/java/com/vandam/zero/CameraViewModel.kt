@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
@@ -15,6 +16,10 @@ import android.view.WindowManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vandam.zero.camera.CameraController
+import com.vandam.zero.camera.CaptureMode
+import com.vandam.zero.camera.VideoPreset
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -45,8 +50,17 @@ class CameraViewModel : ViewModel() {
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage
 
+    private val _captureMode = MutableStateFlow(CaptureMode.PHOTO)
+    val captureMode: StateFlow<CaptureMode> = _captureMode
+
     private val _flashEnabled = MutableStateFlow(false)
     val flashEnabled: StateFlow<Boolean> = _flashEnabled
+
+    private val _videoPreset = MutableStateFlow(VideoPreset.FHD30)
+    val videoPreset: StateFlow<VideoPreset> = _videoPreset
+
+    private val _availableVideoPresets = MutableStateFlow<List<VideoPreset>>(emptyList())
+    val availableVideoPresets: StateFlow<List<VideoPreset>> = _availableVideoPresets
 
     private val _exposureMode = MutableStateFlow(ExposureMode.AUTO)
     val exposureMode: StateFlow<ExposureMode> = _exposureMode
@@ -67,6 +81,7 @@ class CameraViewModel : ViewModel() {
     val isoRange: StateFlow<IntRange> = _isoRange
 
     private var nativeIsoRange: IntRange = 100..1600
+    private var nativeShutterRange: LongRange = 1_000_000L..1_000_000_000L
 
     private val _shutterRange = MutableStateFlow(1_000_000L..1_000_000_000L)
     val shutterRange: StateFlow<LongRange> = _shutterRange
@@ -107,6 +122,12 @@ class CameraViewModel : ViewModel() {
     private val _isMetering = MutableStateFlow(false)
     val isMetering: StateFlow<Boolean> = _isMetering
 
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording
+
+    private val _recordingElapsedMs = MutableStateFlow(0L)
+    val recordingElapsedMs: StateFlow<Long> = _recordingElapsedMs
+
     private val _capturedImageUri = MutableStateFlow<Uri?>(null)
     val capturedImageUri: StateFlow<Uri?> = _capturedImageUri
 
@@ -128,6 +149,21 @@ class CameraViewModel : ViewModel() {
     private var priorFormat: Int = 0
     private var priorFlash: Boolean = false
 
+    private var photoExposureModeState: ExposureMode = ExposureMode.AUTO
+    private var photoExposureValueState: Float = 0f
+    private var photoIsoValueState: Int = 400
+    private var photoShutterSpeedState: Long = 16_666_666L
+    private var photoFlashEnabledState: Boolean = false
+
+    private var videoExposureModeState: ExposureMode = ExposureMode.AUTO
+    private var videoExposureValueState: Float = 0f
+    private var videoIsoValueState: Int = 400
+    private var videoShutterSpeedState: Long = VideoPreset.FHD30.defaultShutterSpeedNs
+    private var videoTorchEnabledState: Boolean = false
+
+    private var recordingTimerJob: Job? = null
+    private var recordingStartElapsedMs: Long = 0L
+
     private var orientationEventListener: OrientationEventListener? = null
     private var currentRotation: Int = Surface.ROTATION_0
     private var lastOrientationDegrees: Int = 0
@@ -147,6 +183,122 @@ class CameraViewModel : ViewModel() {
         EXPOSURE,
         ISO,
         SHUTTER,
+    }
+
+    private fun isVideoMode(): Boolean = _captureMode.value == CaptureMode.VIDEO
+
+    private fun persistActiveModeSettings() {
+        if (isVideoMode()) {
+            videoExposureModeState = _exposureMode.value
+            videoExposureValueState = _exposureValue.value
+            videoIsoValueState = _isoValue.value
+            videoShutterSpeedState = _shutterSpeedNs.value
+            videoTorchEnabledState = _flashEnabled.value
+        } else {
+            photoExposureModeState = _exposureMode.value
+            photoExposureValueState = _exposureValue.value
+            photoIsoValueState = _isoValue.value
+            photoShutterSpeedState = _shutterSpeedNs.value
+            photoFlashEnabledState = _flashEnabled.value
+        }
+    }
+
+    private fun restoreModeSettings(mode: CaptureMode) {
+        if (mode == CaptureMode.VIDEO) {
+            _exposureMode.value = videoExposureModeState
+            _exposureValue.value = videoExposureValueState
+            _isoValue.value = videoIsoValueState
+            _shutterSpeedNs.value = videoShutterSpeedState
+            _flashEnabled.value = videoTorchEnabledState
+        } else {
+            _exposureMode.value = photoExposureModeState
+            _exposureValue.value = photoExposureValueState
+            _isoValue.value = photoIsoValueState
+            _shutterSpeedNs.value = photoShutterSpeedState
+            _flashEnabled.value = photoFlashEnabledState
+        }
+    }
+
+    private fun updatePhotoIsoRangeForFormat() {
+        val isRaw = _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
+        _isoRange.value =
+            if (isRaw) {
+                nativeIsoRange
+            } else {
+                nativeIsoRange.first..(nativeIsoRange.last * 32)
+            }
+        _isoValue.value = _isoValue.value.coerceIn(_isoRange.value.first, _isoRange.value.last)
+        photoIsoValueState = _isoValue.value
+        _shutterRange.value = nativeShutterRange
+        _shutterSpeedNs.value = _shutterSpeedNs.value.coerceIn(_shutterRange.value.first, _shutterRange.value.last)
+        photoShutterSpeedState = _shutterSpeedNs.value
+    }
+
+    private fun getVideoShutterUpperBound(preset: VideoPreset = _videoPreset.value): Long =
+        minOf(nativeShutterRange.last, preset.frameDurationNs)
+
+    private fun updateVideoRanges() {
+        _isoRange.value = nativeIsoRange
+        _isoValue.value = _isoValue.value.coerceIn(_isoRange.value.first, _isoRange.value.last)
+        videoIsoValueState = _isoValue.value
+
+        val upperBound = getVideoShutterUpperBound()
+        _shutterRange.value = nativeShutterRange.first..upperBound
+        _shutterSpeedNs.value = _shutterSpeedNs.value.coerceIn(_shutterRange.value.first, _shutterRange.value.last)
+        videoShutterSpeedState = _shutterSpeedNs.value
+    }
+
+    private fun updateRangesForCurrentMode() {
+        if (isVideoMode()) {
+            updateVideoRanges()
+        } else {
+            updatePhotoIsoRangeForFormat()
+        }
+    }
+
+    private fun applyExposureStateToController() {
+        if (_exposureMode.value == ExposureMode.AUTO) {
+            cameraController?.setAutoExposure(true, _exposureValue.value)
+        } else {
+            cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
+        }
+    }
+
+    private fun applyModeSettingsToController() {
+        val controller = cameraController ?: return
+
+        controller.setCaptureMode(_captureMode.value)
+        if (isVideoMode()) {
+            controller.setVideoPreset(_videoPreset.value)
+            controller.setVideoTorchEnabled(_flashEnabled.value)
+        } else {
+            controller.setFlashEnabled(_flashEnabled.value)
+            controller.setBwMode(_bwMode.value)
+            controller.setFastMode(_isFastMode.value)
+            controller.setOutputFormat(_outputFormat.value)
+        }
+
+        applyExposureStateToController()
+    }
+
+    private fun startRecordingTimer() {
+        recordingTimerJob?.cancel()
+        recordingStartElapsedMs = SystemClock.elapsedRealtime()
+        _recordingElapsedMs.value = 0L
+        recordingTimerJob =
+            viewModelScope.launch {
+                while (true) {
+                    _recordingElapsedMs.value = SystemClock.elapsedRealtime() - recordingStartElapsedMs
+                    delay(250L)
+                }
+            }
+    }
+
+    private fun stopRecordingTimer() {
+        recordingTimerJob?.cancel()
+        recordingTimerJob = null
+        recordingStartElapsedMs = 0L
+        _recordingElapsedMs.value = 0L
     }
 
     fun resetShutterFlash() {
@@ -217,9 +369,55 @@ class CameraViewModel : ViewModel() {
         saveSettings()
     }
 
+    fun toggleCaptureMode() {
+        if (_isCapturing.value || _isSaving.value || _isRecording.value) return
+
+        if (!isVideoMode() && _availableVideoPresets.value.isEmpty()) {
+            _toastMessage.value = "NO VIDEO"
+            return
+        }
+
+        persistActiveModeSettings()
+        _isMetering.value = false
+        _captureMode.value =
+            if (isVideoMode()) {
+                CaptureMode.PHOTO
+            } else {
+                CaptureMode.VIDEO
+            }
+        restoreModeSettings(_captureMode.value)
+        updateRangesForCurrentMode()
+        closeAllPanels()
+        hideCrosshair()
+        applyModeSettingsToController()
+        _toastMessage.value = if (isVideoMode()) "VIDEO" else "PHOTO"
+        saveSettings()
+    }
+
     fun togglePreview() {
         _previewEnabled.value = !_previewEnabled.value
         _toastMessage.value = if (_previewEnabled.value) "PREVIEW ON" else "PREVIEW OFF"
+        saveSettings()
+    }
+
+    fun toggleVideoPreset() {
+        if (!isVideoMode()) return
+        if (_isRecording.value || _isCapturing.value || _isSaving.value) return
+
+        val presets = _availableVideoPresets.value
+        if (presets.isEmpty()) return
+
+        val currentIndex = presets.indexOf(_videoPreset.value).takeIf { it >= 0 } ?: 0
+        val nextPreset = presets[(currentIndex + 1) % presets.size]
+
+        _videoPreset.value = nextPreset
+        videoShutterSpeedState = videoShutterSpeedState.coerceAtMost(nextPreset.frameDurationNs)
+        if (isVideoMode()) {
+            _shutterSpeedNs.value = _shutterSpeedNs.value.coerceAtMost(nextPreset.frameDurationNs)
+        }
+        updateVideoRanges()
+        cameraController?.setVideoPreset(nextPreset)
+        applyExposureStateToController()
         saveSettings()
     }
 
@@ -232,10 +430,18 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleFlash() {
-        if (_isFastMode.value) return
-
         _flashEnabled.value = !_flashEnabled.value
-        cameraController?.setFlashEnabled(_flashEnabled.value)
+        if (isVideoMode()) {
+            videoTorchEnabledState = _flashEnabled.value
+            cameraController?.setVideoTorchEnabled(_flashEnabled.value)
+        } else {
+            if (_isFastMode.value) {
+                _flashEnabled.value = photoFlashEnabledState
+                return
+            }
+            photoFlashEnabledState = _flashEnabled.value
+            cameraController?.setFlashEnabled(_flashEnabled.value)
+        }
         saveSettings()
     }
 
@@ -246,6 +452,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleRedTextMode(): Boolean {
+        if (isVideoMode()) return false
         val context = appContext ?: return false
 
         val isGrayscale = isDisplayGrayscale(context)
@@ -258,6 +465,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleOis() {
+        if (isVideoMode()) return
         _oisEnabled.value = !_oisEnabled.value
         cameraController?.setOisEnabled(_oisEnabled.value)
         _toastMessage.value = if (_oisEnabled.value) "OIS ON" else "OIS OFF"
@@ -329,24 +537,22 @@ class CameraViewModel : ViewModel() {
     fun setExposureMode(mode: ExposureMode) {
         _exposureMode.value = mode
         _sliderMode.value = SliderMode.NONE
-
-        if (mode == ExposureMode.AUTO) {
-            cameraController?.setAutoExposure(true, _exposureValue.value)
-        } else {
-            cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
-        }
+        persistActiveModeSettings()
+        applyExposureStateToController()
         saveSettings()
     }
 
     fun setExposureValue(ev: Float) {
         _exposureValue.value = ev.coerceIn(-2f, 2f)
-        cameraController?.setExposureCompensation(ev)
+        persistActiveModeSettings()
+        cameraController?.setExposureCompensation(_exposureValue.value)
         saveSettings()
     }
 
     private var savedEvForMetering: Float = 0f
 
     fun onMeterButtonPress() {
+        if (isVideoMode()) return
         if (_exposureMode.value != ExposureMode.AUTO) return
         if (_isMetering.value) return
 
@@ -359,6 +565,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onMeterButtonRelease() {
+        if (isVideoMode()) return
         if (!_isMetering.value) return
 
         val evToRestore = savedEvForMetering
@@ -369,6 +576,7 @@ class CameraViewModel : ViewModel() {
     fun setIsoValue(iso: Int) {
         val range = _isoRange.value
         _isoValue.value = iso.coerceIn(range.first, range.last)
+        persistActiveModeSettings()
         cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         saveSettings()
     }
@@ -376,6 +584,7 @@ class CameraViewModel : ViewModel() {
     fun setShutterSpeed(ns: Long) {
         val range = _shutterRange.value
         _shutterSpeedNs.value = ns.coerceIn(range.first, range.last)
+        persistActiveModeSettings()
         cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
         saveSettings()
     }
@@ -389,22 +598,11 @@ class CameraViewModel : ViewModel() {
     }
 
     fun resetShutterSpeedToDefault() {
-        setShutterSpeed(16_666_666L)
+        setShutterSpeed(if (isVideoMode()) _videoPreset.value.defaultShutterSpeedNs else 16_666_666L)
     }
 
     fun closeAllPanels() {
         _sliderMode.value = SliderMode.NONE
-    }
-
-    private fun updateIsoRangeForFormat() {
-        val isRaw = _outputFormat.value == CameraController.OUTPUT_FORMAT_RAW
-        _isoRange.value =
-            if (isRaw) {
-                nativeIsoRange
-            } else {
-                nativeIsoRange.first..(nativeIsoRange.last * 32)
-            }
-        _isoValue.value = _isoValue.value.coerceIn(_isoRange.value.first, _isoRange.value.last)
     }
 
     fun initialize(context: Context) {
@@ -419,11 +617,24 @@ class CameraViewModel : ViewModel() {
         prefs?.let { p ->
             _gridEnabled.value = p.getBoolean("grid_enabled", false)
             _previewEnabled.value = p.getBoolean("preview_enabled", true)
-            _flashEnabled.value = p.getBoolean("flash_enabled", false)
-            _exposureMode.value = ExposureMode.valueOf(p.getString("exposure_mode", "AUTO") ?: "AUTO")
-            _exposureValue.value = p.getFloat("exposure_value", 0f)
-            _isoValue.value = p.getInt("iso_value", 400)
-            _shutterSpeedNs.value = p.getLong("shutter_speed_ns", 16_666_666L)
+            _captureMode.value = CaptureMode.valueOf(p.getString("capture_mode", CaptureMode.PHOTO.name) ?: CaptureMode.PHOTO.name)
+            photoFlashEnabledState = p.getBoolean("flash_enabled", false)
+            photoExposureModeState = ExposureMode.valueOf(p.getString("exposure_mode", "AUTO") ?: "AUTO")
+            photoExposureValueState = p.getFloat("exposure_value", 0f)
+            photoIsoValueState = p.getInt("iso_value", 400)
+            photoShutterSpeedState = p.getLong("shutter_speed_ns", 16_666_666L)
+            videoTorchEnabledState = p.getBoolean("video_torch_enabled", false)
+            videoExposureModeState = ExposureMode.valueOf(p.getString("video_exposure_mode", "AUTO") ?: "AUTO")
+            videoExposureValueState = p.getFloat("video_exposure_value", 0f)
+            videoIsoValueState = p.getInt("video_iso_value", 400)
+            videoShutterSpeedState =
+                p.getLong(
+                    "video_shutter_speed_ns",
+                    VideoPreset.FHD30.defaultShutterSpeedNs,
+                )
+            val savedVideoPresetName = p.getString("video_preset", VideoPreset.FHD30.name) ?: VideoPreset.FHD30.name
+            _videoPreset.value =
+                runCatching { VideoPreset.valueOf(savedVideoPresetName) }.getOrDefault(VideoPreset.FHD30)
             _outputFormat.value = p.getInt("output_format", CameraController.OUTPUT_FORMAT_JPEG)
             _bwMode.value = p.getBoolean("bw_mode", false)
             _colorMode.value = p.getBoolean("color_mode_bw", false)
@@ -432,6 +643,7 @@ class CameraViewModel : ViewModel() {
             _oisEnabled.value = p.getBoolean("ois_enabled", true)
             _uiHidden.value = p.getBoolean("ui_hidden", false)
             _cameraHidden.value = p.getBoolean("camera_hidden", false)
+            restoreModeSettings(_captureMode.value)
             if (_uiHidden.value) {
                 _toastMessage.value = "UI OFF"
             }
@@ -442,14 +654,22 @@ class CameraViewModel : ViewModel() {
     }
 
     private fun saveSettings() {
+        persistActiveModeSettings()
         prefs?.edit()?.apply {
             putBoolean("grid_enabled", _gridEnabled.value)
             putBoolean("preview_enabled", _previewEnabled.value)
-            putBoolean("flash_enabled", _flashEnabled.value)
-            putString("exposure_mode", _exposureMode.value.name)
-            putFloat("exposure_value", _exposureValue.value)
-            putInt("iso_value", _isoValue.value)
-            putLong("shutter_speed_ns", _shutterSpeedNs.value)
+            putString("capture_mode", _captureMode.value.name)
+            putBoolean("flash_enabled", photoFlashEnabledState)
+            putString("exposure_mode", photoExposureModeState.name)
+            putFloat("exposure_value", photoExposureValueState)
+            putInt("iso_value", photoIsoValueState)
+            putLong("shutter_speed_ns", photoShutterSpeedState)
+            putBoolean("video_torch_enabled", videoTorchEnabledState)
+            putString("video_exposure_mode", videoExposureModeState.name)
+            putFloat("video_exposure_value", videoExposureValueState)
+            putInt("video_iso_value", videoIsoValueState)
+            putLong("video_shutter_speed_ns", videoShutterSpeedState)
+            putString("video_preset", _videoPreset.value.name)
             putInt("output_format", _outputFormat.value)
             putBoolean("bw_mode", _bwMode.value)
             putBoolean("color_mode_bw", _colorMode.value)
@@ -480,7 +700,7 @@ class CameraViewModel : ViewModel() {
 
         setupOrientationListener(context)
 
-        if (_isFastMode.value) {
+        if (!isVideoMode() && _isFastMode.value) {
             _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
         }
 
@@ -491,7 +711,10 @@ class CameraViewModel : ViewModel() {
         }
 
         cameraController?.setInitialOutputFormat(_outputFormat.value)
-        cameraController?.setFlashEnabled(_flashEnabled.value)
+        cameraController?.setCaptureMode(_captureMode.value)
+        cameraController?.setFlashEnabled(photoFlashEnabledState)
+        cameraController?.setVideoPreset(_videoPreset.value)
+        cameraController?.setVideoTorchEnabled(videoTorchEnabledState)
         cameraController?.setBwMode(_bwMode.value)
         cameraController?.setFastMode(_isFastMode.value)
         cameraController?.setOisEnabled(_oisEnabled.value)
@@ -512,18 +735,33 @@ class CameraViewModel : ViewModel() {
                     }
                 _availableFormats.value = orderedFormats
             },
+            onVideoPresetsAvailable = { presets ->
+                _availableVideoPresets.value = presets
+                if (presets.isEmpty() && isVideoMode()) {
+                    _captureMode.value = CaptureMode.PHOTO
+                    restoreModeSettings(CaptureMode.PHOTO)
+                    _toastMessage.value = "PHOTO"
+                    applyModeSettingsToController()
+                    saveSettings()
+                } else if (presets.isNotEmpty() && _videoPreset.value !in presets) {
+                    _videoPreset.value = presets.firstOrNull { it.fps == _videoPreset.value.fps } ?: presets.first()
+                    videoShutterSpeedState = videoShutterSpeedState.coerceAtMost(_videoPreset.value.frameDurationNs)
+                    if (isVideoMode()) {
+                        _shutterSpeedNs.value = videoShutterSpeedState
+                        updateVideoRanges()
+                        cameraController?.setVideoPreset(_videoPreset.value)
+                        applyExposureStateToController()
+                    }
+                    saveSettings()
+                }
+            },
             onCameraReady = {
                 cameraController?.getIsoRange()?.let { sensorRange ->
                     nativeIsoRange = sensorRange
-                    updateIsoRangeForFormat()
                 }
-                cameraController?.getExposureTimeRange()?.let { _shutterRange.value = it }
-
-                if (_exposureMode.value == ExposureMode.AUTO) {
-                    cameraController?.setAutoExposure(true, _exposureValue.value)
-                } else {
-                    cameraController?.setManualExposure(_isoValue.value, _shutterSpeedNs.value)
-                }
+                cameraController?.getExposureTimeRange()?.let { nativeShutterRange = it }
+                updateRangesForCurrentMode()
+                applyModeSettingsToController()
             },
         )
     }
@@ -595,6 +833,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleOutputFormat() {
+        if (isVideoMode()) return
         if (_isCapturing.value || _isSaving.value) return
 
         val formats = _availableFormats.value
@@ -619,7 +858,8 @@ class CameraViewModel : ViewModel() {
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
                 _bwMode.value = _colorMode.value
                 _flashEnabled.value = false
-                updateIsoRangeForFormat()
+                photoFlashEnabledState = false
+                updatePhotoIsoRangeForFormat()
 
                 cameraController?.setFastMode(true)
                 cameraController?.setBwMode(_bwMode.value)
@@ -638,7 +878,7 @@ class CameraViewModel : ViewModel() {
 
                 _bwMode.value = false
                 _outputFormat.value = CameraController.OUTPUT_FORMAT_RAW
-                updateIsoRangeForFormat()
+                updatePhotoIsoRangeForFormat()
                 cameraController?.setBwMode(false)
                 cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_RAW)
             }
@@ -654,7 +894,7 @@ class CameraViewModel : ViewModel() {
 
                 _bwMode.value = _colorMode.value
                 _outputFormat.value = newOption
-                updateIsoRangeForFormat()
+                updatePhotoIsoRangeForFormat()
                 cameraController?.setBwMode(_bwMode.value)
                 cameraController?.setOutputFormat(newOption)
             }
@@ -663,12 +903,14 @@ class CameraViewModel : ViewModel() {
     }
 
     fun setOutputFormat(format: Int) {
+        if (isVideoMode()) return
         _outputFormat.value = format
         cameraController?.setOutputFormat(format)
         saveSettings()
     }
 
     fun toggleColorMode() {
+        if (isVideoMode()) return
         if (_isCapturing.value || _isSaving.value) return
         if (_outputFormat.value == CameraController.OUTPUT_FORMAT_RAW) return
 
@@ -695,6 +937,40 @@ class CameraViewModel : ViewModel() {
 
     fun onShutterButtonPress() {
         val controller = cameraController ?: return
+
+        if (isVideoMode()) {
+            closeAllPanels()
+
+            if (_isRecording.value) {
+                _isSaving.value = true
+                controller.stopVideoRecording(
+                    onComplete = {
+                        _isRecording.value = false
+                        stopRecordingTimer()
+                    },
+                    onReady = {
+                        _isSaving.value = false
+                    },
+                )
+            } else {
+                _isCapturing.value = true
+                controller.startVideoRecording(
+                    onStarted = {
+                        _isCapturing.value = false
+                        _isRecording.value = true
+                        startRecordingTimer()
+                    },
+                    onError = { reason ->
+                        _isCapturing.value = false
+                        _isSaving.value = false
+                        _isRecording.value = false
+                        stopRecordingTimer()
+                        _toastMessage.value = reason
+                    },
+                )
+            }
+            return
+        }
 
         if (controller.hasPendingCaptures() || _isMetering.value) {
             return
@@ -761,6 +1037,11 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onFocusButtonPress() {
+        if (isVideoMode()) {
+            _isFocusButtonHeld.value = false
+            hideCrosshair()
+            return
+        }
         if (_isFastMode.value) return
         if (_isMetering.value) return
 
@@ -799,7 +1080,7 @@ class CameraViewModel : ViewModel() {
         width: Float,
         height: Float,
     ) {
-        if (_isFastMode.value) return
+        if (!isVideoMode() && _isFastMode.value) return
         if (_isMetering.value) return
         lastFocusPoint = Pair(x, y)
         lastFocusTimestamp = System.currentTimeMillis()
@@ -808,6 +1089,7 @@ class CameraViewModel : ViewModel() {
     }
 
     fun toggleFastMode() {
+        if (isVideoMode()) return
         if (_isCapturing.value || _isSaving.value) return
 
         val enable = !_isFastMode.value
@@ -819,19 +1101,25 @@ class CameraViewModel : ViewModel() {
             _isFastMode.value = true
             _bwMode.value = false
             _outputFormat.value = CameraController.OUTPUT_FORMAT_JPEG
+            photoFlashEnabledState = _flashEnabled.value
+            _flashEnabled.value = false
 
             cameraController?.setFastMode(true)
             cameraController?.setBwMode(false)
+            cameraController?.setFlashEnabled(false)
             cameraController?.setOutputFormat(CameraController.OUTPUT_FORMAT_JPEG)
         } else {
             _isFastMode.value = false
             _previewEnabled.value = priorPreview
             _outputFormat.value = priorFormat
+            _flashEnabled.value = photoFlashEnabledState
 
             cameraController?.setFastMode(false)
+            cameraController?.setFlashEnabled(_flashEnabled.value)
             cameraController?.setOutputFormat(priorFormat)
         }
 
+        updatePhotoIsoRangeForFormat()
         saveSettings()
     }
 
@@ -839,6 +1127,10 @@ class CameraViewModel : ViewModel() {
 
     fun onPause() {
         orientationEventListener?.disable()
+        _isCapturing.value = false
+        _isSaving.value = false
+        _isRecording.value = false
+        stopRecordingTimer()
         cameraController?.shutdown()
         cameraController = null
     }
@@ -859,6 +1151,7 @@ class CameraViewModel : ViewModel() {
         super.onCleared()
         orientationEventListener?.disable()
         orientationEventListener = null
+        stopRecordingTimer()
         cameraController?.shutdown()
     }
 }

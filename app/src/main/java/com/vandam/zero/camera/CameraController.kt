@@ -14,12 +14,15 @@ import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
@@ -77,17 +80,34 @@ class CameraController(
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private val cameraOpenCloseLock = Semaphore(1)
+    private val cameraManager by lazy {
+        context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    }
 
     private var textureView: TextureView? = null
     private var previewSurface: Surface? = null
     private var previewSize: Size? = null
 
+    private var captureMode: CaptureMode = CaptureMode.PHOTO
     private var currentOutputFormat: Int = OUTPUT_FORMAT_JPEG
     private var flashEnabled: Boolean = false
+    private var videoTorchEnabled: Boolean = false
     private var bwMode: Boolean = false
     private var fastMode: Boolean = false
     private var monoFlavor: Boolean = BuildConfig.MONOCHROME_MODE
     private var oisEnabled: Boolean = true
+    private var videoPreset: VideoPreset = VideoPreset.FHD30
+    private var supportedVideoPresets: List<VideoPreset> = emptyList()
+    private val videoFpsRanges = mutableMapOf<VideoPreset, Range<Int>>()
+    private var supportsVideoStabilization: Boolean = false
+    private var mediaRecorder: MediaRecorder? = null
+    private var recorderSurface: Surface? = null
+    private var videoOutputUri: Uri? = null
+    private var videoOutputFileDescriptor: ParcelFileDescriptor? = null
+    private var pendingVideoRecordingStart: Boolean = false
+    private var isVideoRecording: Boolean = false
+    private var onVideoRecordingStartedCallback: (() -> Unit)? = null
+    private var onVideoRecordingErrorCallback: ((String) -> Unit)? = null
 
     private var autoExposure: Boolean = true
     private var exposureCompensation: Int = 0
@@ -115,9 +135,12 @@ class CameraController(
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val conversionExecutor = Executors.newFixedThreadPool(2)
+    private val sessionExecutor = Executors.newSingleThreadExecutor()
 
     private var onCameraReadyCallback: (() -> Unit)? = null
+    private var onVideoStopReadyCallback: (() -> Unit)? = null
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
+    private var onVideoPresetsAvailableCallback: ((List<VideoPreset>) -> Unit)? = null
 
     private val identityTonemapCurve =
         TonemapCurve(
@@ -132,6 +155,8 @@ class CameraController(
 
     fun getExposureTimeRange(): LongRange? = exposureTimeRange?.let { it.lower..it.upper }
 
+    fun getSupportedVideoPresets(): List<VideoPreset> = supportedVideoPresets
+
     fun createPreviewView(context: Context): TextureView =
         TextureView(context).also { tv ->
             textureView = tv
@@ -145,7 +170,7 @@ class CameraController(
                 width: Int,
                 height: Int,
             ) {
-                Log.d(TAG, "Surface texture available: ${width}x$height")
+                Log.e(TAG, "Surface texture available: ${width}x$height")
                 openCamera()
             }
 
@@ -154,11 +179,11 @@ class CameraController(
                 width: Int,
                 height: Int,
             ) {
-                Log.d(TAG, "Surface texture size changed: ${width}x$height")
+                Log.e(TAG, "Surface texture size changed: ${width}x$height")
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                Log.d(TAG, "Surface texture destroyed")
+                Log.e(TAG, "Surface texture destroyed")
                 return true
             }
 
@@ -168,17 +193,20 @@ class CameraController(
 
     fun setInitialOutputFormat(format: Int) {
         currentOutputFormat = format
-        Log.d(TAG, "Initial output format set to: ${getFormatName(format)}")
+        Log.e(TAG, "Initial output format set to: ${getFormatName(format)}")
     }
 
     fun bindCamera(
         textureView: TextureView,
         onFormatsAvailable: (List<Int>) -> Unit = {},
+        onVideoPresetsAvailable: (List<VideoPreset>) -> Unit = {},
         onCameraReady: (() -> Unit)? = null,
     ) {
         this.textureView = textureView
         this.onCameraReadyCallback = onCameraReady
+        this.onVideoStopReadyCallback = null
         this.onFormatsAvailableCallback = onFormatsAvailable
+        this.onVideoPresetsAvailableCallback = onVideoPresetsAvailable
 
         if (textureView.isAvailable) {
             openCamera()
@@ -209,8 +237,6 @@ class CameraController(
     private fun openCamera() {
         startBackgroundThread()
 
-        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-
         cameraId =
             cameraManager.cameraIdList.firstOrNull { id ->
                 val chars = cameraManager.getCameraCharacteristics(id)
@@ -237,14 +263,18 @@ class CameraController(
         maxAfRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
         maxAeRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
 
-        Log.d(TAG, "Camera capabilities - ISO: $isoRange, Exposure: $exposureTimeRange")
-        Log.d(TAG, "AF regions: $maxAfRegions, AE regions: $maxAeRegions, Sensor orientation: $sensorOrientation")
+        Log.e(TAG, "Camera capabilities - ISO: $isoRange, Exposure: $exposureTimeRange")
+        Log.e(TAG, "AF regions: $maxAfRegions, AE regions: $maxAeRegions, Sensor orientation: $sensorOrientation")
 
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
         supportsRaw = rawSizes != null && rawSizes.isNotEmpty() && !BuildConfig.MONOCHROME_MODE
+        supportsVideoStabilization =
+            chars
+                .get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true
 
-        Log.d(TAG, "RAW supported: $supportsRaw")
+        Log.e(TAG, "RAW supported: $supportsRaw")
 
         val formats = mutableListOf<Int>()
         formats.add(OUTPUT_FORMAT_JPEG)
@@ -252,6 +282,8 @@ class CameraController(
             formats.add(OUTPUT_FORMAT_RAW)
         }
         onFormatsAvailableCallback?.invoke(formats)
+        updateSupportedVideoPresets(chars, map)
+        onVideoPresetsAvailableCallback?.invoke(supportedVideoPresets)
 
         setupImageReaders(chars, map)
 
@@ -276,7 +308,7 @@ class CameraController(
         if (supportsRaw) {
             val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
             val rawSize = rawSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
-            Log.d(TAG, "RAW capture size: ${rawSize.width}x${rawSize.height}")
+            Log.e(TAG, "RAW capture size: ${rawSize.width}x${rawSize.height}")
 
             rawImageReader =
                 ImageReader
@@ -295,7 +327,7 @@ class CameraController(
                     }
 
             val previewYuvSize = choosePreviewYuvSize(yuvSizes, rawSize)
-            Log.d(TAG, "RAW preview YUV size: ${previewYuvSize.width}x${previewYuvSize.height}")
+            Log.e(TAG, "RAW preview YUV size: ${previewYuvSize.width}x${previewYuvSize.height}")
 
             thumbnailImageReader =
                 ImageReader
@@ -314,7 +346,7 @@ class CameraController(
                     }
         }
         val yuvSize = yuvSizes?.maxByOrNull { it.width * it.height } ?: Size(4000, 3000)
-        Log.d(TAG, "YUV capture size: ${yuvSize.width}x${yuvSize.height}")
+        Log.e(TAG, "YUV capture size: ${yuvSize.width}x${yuvSize.height}")
 
         zslImageReader =
             ImageReader
@@ -345,7 +377,7 @@ class CameraController(
 
         val displaySizes = map?.getOutputSizes(SurfaceTexture::class.java)
         previewSize = chooseOptimalPreviewSize(displaySizes, textureView?.width ?: 1080, textureView?.height ?: 1920)
-        Log.d(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
+        Log.e(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
     }
 
     private fun choosePreviewYuvSize(
@@ -391,6 +423,50 @@ class CameraController(
         return suitable.firstOrNull() ?: choices.maxByOrNull { it.width * it.height } ?: Size(1440, 1080)
     }
 
+    private fun updateSupportedVideoPresets(
+        chars: CameraCharacteristics,
+        map: android.hardware.camera2.params.StreamConfigurationMap?,
+    ) {
+        val recorderSizes = map?.getOutputSizes(MediaRecorder::class.java)?.toList().orEmpty()
+        val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList().orEmpty()
+        val preferredPresets = listOf(VideoPreset.FHD30, VideoPreset.FHD24)
+
+        videoFpsRanges.clear()
+        supportedVideoPresets =
+            preferredPresets.filter { preset ->
+                val hasSize = recorderSizes.any { it.width == preset.width && it.height == preset.height }
+                val fpsRange = chooseVideoFpsRange(preset, fpsRanges)
+                if (hasSize && fpsRange != null) {
+                    videoFpsRanges[preset] = fpsRange
+                    true
+                } else {
+                    false
+                }
+            }
+
+        if (supportedVideoPresets.isNotEmpty() && videoPreset !in supportedVideoPresets) {
+            videoPreset = supportedVideoPresets.first()
+        }
+
+        Log.e(TAG, "Supported video presets: $supportedVideoPresets")
+    }
+
+    private fun chooseVideoFpsRange(
+        preset: VideoPreset,
+        ranges: List<Range<Int>>,
+    ): Range<Int>? =
+        ranges
+            .filter { range -> range.lower <= preset.fps && range.upper >= preset.fps }
+            .sortedWith(
+                compareBy<Range<Int>>(
+                    { if (it.lower == preset.fps && it.upper == preset.fps) 0 else 1 },
+                    { if (it.upper == preset.fps) 0 else 1 },
+                    { it.upper - it.lower },
+                    { kotlin.math.abs(it.upper - preset.fps) },
+                    { kotlin.math.abs(it.lower - preset.fps) },
+                ),
+            ).firstOrNull()
+
     private val stateCallback =
         object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
@@ -416,43 +492,82 @@ class CameraController(
             }
         }
 
+    private fun shouldIncludeRecorderSurface(): Boolean = captureMode == CaptureMode.VIDEO && recorderSurface != null
+
+    private fun recreateCaptureSession() {
+        Log.e(TAG, "RECREATE: closing existing session=$captureSession")
+        previewRequestBuilder = null
+        captureSession?.close()
+        captureSession = null
+        Log.e(TAG, "RECREATE: creating new session")
+        createCaptureSession()
+    }
+
     private fun createCaptureSession() {
         val camera = cameraDevice ?: return
         val texture = textureView?.surfaceTexture ?: return
         val preview = previewSize ?: return
 
         texture.setDefaultBufferSize(preview.width, preview.height)
+        previewSurface?.release()
         previewSurface = Surface(texture)
 
         val surfaces = mutableListOf<Surface>()
         surfaces.add(previewSurface!!)
-        zslImageReader?.surface?.let { surfaces.add(it) }
-        rawImageReader?.surface?.let { surfaces.add(it) }
-        thumbnailImageReader?.surface?.let { surfaces.add(it) }
+        if (captureMode == CaptureMode.PHOTO) {
+            zslImageReader?.surface?.let { surfaces.add(it) }
+            rawImageReader?.surface?.let { surfaces.add(it) }
+            thumbnailImageReader?.surface?.let { surfaces.add(it) }
 
-        if (fastMode) {
-            Log.d(TAG, "Session config: Preview + YUV + RAW + Thumbnail [fast mode]")
+            if (fastMode) {
+                Log.e(TAG, "Session config: Preview + YUV + RAW + Thumbnail [fast mode]")
+            } else {
+                Log.e(TAG, "Session config: Preview + YUV + RAW + Thumbnail [normal mode]")
+            }
+        } else if (shouldIncludeRecorderSurface()) {
+            recorderSurface?.let { surfaces.add(it) }
+            Log.e(TAG, "Session config: Preview + Recorder [video record]")
         } else {
-            Log.d(TAG, "Session config: Preview + YUV + RAW + Thumbnail [normal mode]")
+            Log.e(TAG, "Session config: Preview only [video idle]")
         }
+
+        Log.e(
+            TAG,
+            "CREATE SESSION: surfaces=${surfaces.size}, recorderSurface=$recorderSurface, pendingStart=$pendingVideoRecordingStart",
+        )
 
         try {
             val stateCallback =
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        Log.e(TAG, "onConfigured: device=$cameraDevice, session=$session")
                         if (cameraDevice == null) return
                         captureSession = session
-                        startPreview()
+                        try {
+                            startPreview()
+                        } catch (e: IllegalStateException) {
+                            Log.e(TAG, "Camera closed before preview started", e)
+                            return
+                        }
 
                         applyGrayscaleFilterToPreview()
 
                         coroutineScope.launch(Dispatchers.Main) {
                             onCameraReadyCallback?.invoke()
+                            onVideoStopReadyCallback?.invoke()
+                            onVideoStopReadyCallback = null
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Capture session configuration failed")
+                        Log.e(TAG, "onConfigureFailed: Capture session configuration failed")
+                        if (pendingVideoRecordingStart) {
+                            pendingVideoRecordingStart = false
+                            releasePreparedVideoRecorder(deleteOutput = true)
+                            onVideoRecordingErrorCallback?.invoke("SESSION FAIL")
+                            onVideoRecordingErrorCallback = null
+                            onVideoRecordingStartedCallback = null
+                        }
                         postToast("Camera configuration failed")
                     }
                 }
@@ -463,7 +578,7 @@ class CameraController(
                     SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
                         outputConfigs,
-                        Executors.newSingleThreadExecutor(),
+                        sessionExecutor,
                         stateCallback,
                     )
                 camera.createCaptureSession(sessionConfig)
@@ -482,7 +597,22 @@ class CameraController(
         val surface = previewSurface ?: return
 
         try {
-            if (fastMode && zslImageReader != null) {
+            if (captureMode == CaptureMode.VIDEO) {
+                val template =
+                    if (shouldIncludeRecorderSurface()) {
+                        CameraDevice.TEMPLATE_RECORD
+                    } else {
+                        CameraDevice.TEMPLATE_PREVIEW
+                    }
+                previewRequestBuilder =
+                    camera.createCaptureRequest(template).apply {
+                        addTarget(surface)
+                        recorderSurface?.takeIf { shouldIncludeRecorderSurface() }?.let { addTarget(it) }
+                        applyCommonSettings(this)
+                    }
+                zslEnabled = false
+                Log.e(TAG, "Preview started [video]")
+            } else if (fastMode && zslImageReader != null) {
                 previewRequestBuilder =
                     camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG).apply {
                         addTarget(surface)
@@ -490,7 +620,7 @@ class CameraController(
                         applyCommonSettings(this)
                     }
                 zslEnabled = true
-                Log.d(TAG, "Preview started with ZSL [fast mode]")
+                Log.e(TAG, "Preview started with ZSL [fast mode]")
             } else {
                 previewRequestBuilder =
                     camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -498,10 +628,14 @@ class CameraController(
                         applyCommonSettings(this)
                     }
                 zslEnabled = false
-                Log.d(TAG, "Preview started [normal mode]")
+                Log.e(TAG, "Preview started [normal mode]")
             }
 
             session.setRepeatingRequest(previewRequestBuilder!!.build(), null, backgroundHandler)
+
+            if (captureMode == CaptureMode.VIDEO && pendingVideoRecordingStart && shouldIncludeRecorderSurface()) {
+                startPreparedVideoRecording()
+            }
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error starting preview", e)
         }
@@ -511,17 +645,56 @@ class CameraController(
      * Applies common capture settings based on current mode.
      */
     private fun applyCommonSettings(builder: CaptureRequest.Builder) {
-        if (fastMode) {
+        if (captureMode == CaptureMode.VIDEO) {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, getActiveVideoFpsRange())
+
+            if (autoExposure) {
+                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
+            } else {
+                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                builder.set(
+                    CaptureRequest.SENSOR_SENSITIVITY,
+                    manualIso.coerceIn(
+                        isoRange?.lower ?: 100,
+                        isoRange?.upper ?: 1600,
+                    ),
+                )
+                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, getActiveVideoExposureTimeNs())
+                builder.set(CaptureRequest.SENSOR_FRAME_DURATION, videoPreset.frameDurationNs)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, 100)
+                }
+            }
+
+            builder.set(
+                CaptureRequest.FLASH_MODE,
+                if (videoTorchEnabled) {
+                    CaptureRequest.FLASH_MODE_TORCH
+                } else {
+                    CaptureRequest.FLASH_MODE_OFF
+                },
+            )
+            builder.set(
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                if (supportsVideoStabilization) {
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                } else {
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                },
+            )
+        } else if (fastMode) {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, HYPERFOCAL_DIOPTERS)
         } else {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
 
-        if (autoExposure) {
+        if (captureMode == CaptureMode.PHOTO && autoExposure) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
-        } else {
+        } else if (captureMode == CaptureMode.PHOTO) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
 
             val maxSensorIso = isoRange?.upper ?: 1600
@@ -559,12 +732,25 @@ class CameraController(
         builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
 
         val oisMode =
-            if (oisEnabled) {
+            if (captureMode == CaptureMode.VIDEO || oisEnabled) {
                 CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
             } else {
                 CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
             }
         builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, oisMode)
+
+        if (captureMode == CaptureMode.PHOTO) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+        }
+    }
+
+    private fun getActiveVideoFpsRange(): Range<Int> = videoFpsRanges[videoPreset] ?: Range(videoPreset.fps, videoPreset.fps)
+
+    private fun getActiveVideoExposureTimeNs(): Long {
+        val minExposure = exposureTimeRange?.lower ?: 1_000_000L
+        val maxExposure = minOf(exposureTimeRange?.upper ?: videoPreset.frameDurationNs, videoPreset.frameDurationNs)
+        return manualExposureTimeNs.coerceIn(minExposure, maxExposure)
     }
 
     /**
@@ -580,6 +766,306 @@ class CameraController(
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error updating preview", e)
         }
+    }
+
+    fun setCaptureMode(mode: CaptureMode) {
+        if (captureMode == mode) return
+
+        if (isVideoRecording) {
+            Log.w(TAG, "Ignoring mode switch while recording video")
+            return
+        }
+
+        if (mode != CaptureMode.VIDEO) {
+            releasePreparedVideoRecorder(deleteOutput = true)
+        }
+
+        captureMode = mode
+        previewRequestBuilder = null
+        zslEnabled = false
+
+        if (cameraDevice != null) {
+            recreateCaptureSession()
+        }
+    }
+
+    fun setVideoPreset(preset: VideoPreset) {
+        if (isVideoRecording || pendingVideoRecordingStart) return
+
+        if (supportedVideoPresets.isNotEmpty() && preset !in supportedVideoPresets) {
+            Log.w(TAG, "Ignoring unsupported video preset: $preset")
+            return
+        }
+
+        if (videoPreset == preset) return
+
+        videoPreset = preset
+        Log.e(TAG, "Video preset changed to: ${preset.label}")
+
+        if (captureMode == CaptureMode.VIDEO) {
+            updatePreview()
+        }
+    }
+
+    fun setVideoTorchEnabled(enabled: Boolean) {
+        if (videoTorchEnabled == enabled) return
+        videoTorchEnabled = enabled
+        Log.e(TAG, "Video torch ${if (enabled) "enabled" else "disabled"}")
+        if (captureMode == CaptureMode.VIDEO) {
+            updatePreview()
+        }
+    }
+
+    fun isRecordingVideo(): Boolean = isVideoRecording
+
+    fun startVideoRecording(
+        onStarted: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        if (captureMode != CaptureMode.VIDEO || isVideoRecording || pendingVideoRecordingStart) {
+            onError("REC FAIL")
+            return
+        }
+
+        if (supportedVideoPresets.isNotEmpty() && videoPreset !in supportedVideoPresets) {
+            videoPreset = supportedVideoPresets.first()
+        }
+
+        if (!prepareMediaRecorderForRecording()) {
+            onError("PREP FAIL")
+            return
+        }
+
+        onVideoRecordingStartedCallback = onStarted
+        onVideoRecordingErrorCallback = onError
+        pendingVideoRecordingStart = true
+        recreateCaptureSession()
+    }
+
+    fun stopVideoRecording(
+        onComplete: (Uri?) -> Unit = {},
+        onReady: () -> Unit = {},
+    ) {
+        pendingVideoRecordingStart = false
+        isVideoRecording = false
+        onVideoRecordingStartedCallback = null
+        onVideoRecordingErrorCallback = null
+        onVideoStopReadyCallback = onReady
+
+        coroutineScope.launch(Dispatchers.Main) { onComplete(null) }
+
+        val recorder = mediaRecorder
+        val outputUri = videoOutputUri
+
+        coroutineScope.launch(Dispatchers.IO) {
+            var savedUri = outputUri
+            if (recorder != null) {
+                try {
+                    recorder.stop()
+                } catch (e: RuntimeException) {
+                    Log.e(TAG, "Failed to stop recorder cleanly", e)
+                    savedUri = null
+                }
+            }
+            releasePreparedVideoRecorder(deleteOutput = savedUri == null)
+
+            captureSession?.close()
+            captureSession = null
+            previewRequestBuilder = null
+            cameraDevice?.close()
+            cameraDevice = null
+
+            savedUri?.let { finalizePendingVideo(it) }
+
+            try {
+                if (!cameraOpenCloseLock.tryAcquire(CAMERA_OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    Log.e(TAG, "Timeout waiting to re-open camera")
+                } else {
+                    cameraManager.openCamera(cameraId!!, stateCallback, backgroundHandler)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error re-opening camera", e)
+                cameraOpenCloseLock.release()
+            }
+        }
+    }
+
+    private fun prepareMediaRecorderForRecording(): Boolean {
+        releasePreparedVideoRecorder(deleteOutput = true)
+
+        val outputUri = createPendingVideoUri() ?: return false
+        val outputDescriptor =
+            context.contentResolver.openFileDescriptor(outputUri, "rw") ?: run {
+                deletePendingVideo(outputUri)
+                return false
+            }
+
+        val recorder = MediaRecorder()
+
+        return try {
+            recorder.apply {
+                setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setOutputFile(outputDescriptor.fileDescriptor)
+                setVideoEncodingBitRate(getVideoEncodingBitRate(videoPreset))
+                setVideoFrameRate(videoPreset.fps)
+                setVideoSize(videoPreset.width, videoPreset.height)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setAudioEncodingBitRate(128_000)
+                setAudioSamplingRate(48_000)
+                setAudioChannels(1)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOrientationHint(0)
+                prepare()
+            }
+
+            mediaRecorder = recorder
+            recorderSurface = recorder.surface
+            videoOutputUri = outputUri
+            videoOutputFileDescriptor = outputDescriptor
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to prepare MediaRecorder", e)
+            try {
+                recorder.release()
+            } catch (_: Exception) {
+            }
+            outputDescriptor.close()
+            deletePendingVideo(outputUri)
+            false
+        }
+    }
+
+    private fun getVideoEncodingBitRate(preset: VideoPreset): Int =
+        when (preset) {
+            VideoPreset.FHD24 -> 12_000_000
+            VideoPreset.FHD30 -> 14_000_000
+        }
+
+    private fun createPendingVideoUri(): Uri? {
+        val name =
+            SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+                .format(System.currentTimeMillis()) + ".mp4"
+
+        val contentValues =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Zero")
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                }
+            }
+
+        return context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+    }
+
+    private fun startPreparedVideoRecording() {
+        val recorder =
+            mediaRecorder ?: run {
+                pendingVideoRecordingStart = false
+                onVideoRecordingErrorCallback?.invoke("REC FAIL")
+                onVideoRecordingErrorCallback = null
+                onVideoRecordingStartedCallback = null
+                return
+            }
+
+        try {
+            recorder.start()
+            pendingVideoRecordingStart = false
+            isVideoRecording = true
+            onVideoRecordingStartedCallback?.invoke()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start video recording", e)
+            pendingVideoRecordingStart = false
+            isVideoRecording = false
+            releasePreparedVideoRecorder(deleteOutput = true)
+            onVideoRecordingErrorCallback?.invoke("START FAIL")
+
+            if (cameraDevice != null && captureMode == CaptureMode.VIDEO) {
+                recreateCaptureSession()
+            }
+        } finally {
+            onVideoRecordingStartedCallback = null
+            onVideoRecordingErrorCallback = null
+        }
+    }
+
+    private fun stopVideoRecordingInternal(): Uri? {
+        val recorder = mediaRecorder
+        val outputUri = videoOutputUri
+        val wasRecording = isVideoRecording
+
+        pendingVideoRecordingStart = false
+        isVideoRecording = false
+        onVideoRecordingStartedCallback = null
+        onVideoRecordingErrorCallback = null
+
+        if (recorder == null) {
+            releasePreparedVideoRecorder(deleteOutput = true)
+            return null
+        }
+
+        var savedUri = outputUri
+
+        try {
+            if (wasRecording) {
+                recorder.stop()
+            } else {
+                savedUri = null
+            }
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Failed to stop video recording cleanly", e)
+            savedUri = null
+        } finally {
+            releasePreparedVideoRecorder(deleteOutput = savedUri == null)
+        }
+
+        savedUri?.let { finalizePendingVideo(it) }
+        return savedUri
+    }
+
+    private fun finalizePendingVideo(uri: Uri) {
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+            val contentValues =
+                ContentValues().apply {
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                }
+            context.contentResolver.update(uri, contentValues, null, null)
+        }
+    }
+
+    private fun deletePendingVideo(uri: Uri) {
+        runCatching {
+            context.contentResolver.delete(uri, null, null)
+        }.onFailure { error ->
+            Log.e(TAG, "Failed to delete pending video", error)
+        }
+    }
+
+    private fun releasePreparedVideoRecorder(deleteOutput: Boolean) {
+        runCatching {
+            mediaRecorder?.reset()
+        }
+        runCatching {
+            mediaRecorder?.release()
+        }
+        runCatching {
+            recorderSurface?.release()
+        }
+        runCatching {
+            videoOutputFileDescriptor?.close()
+        }
+
+        if (deleteOutput) {
+            videoOutputUri?.let { deletePendingVideo(it) }
+        }
+
+        mediaRecorder = null
+        recorderSurface = null
+        videoOutputFileDescriptor = null
+        videoOutputUri = null
     }
 
     // ===================
@@ -600,6 +1086,12 @@ class CameraController(
         onComplete: (Uri?) -> Unit = {},
         onBenchmark: (shutterMs: Long, saveMs: Long) -> Unit = { _, _ -> },
     ) {
+        if (captureMode != CaptureMode.PHOTO) {
+            Log.w(TAG, "Ignoring photo capture while in video mode")
+            onComplete(null)
+            return
+        }
+
         val camera =
             cameraDevice ?: run {
                 Log.e(TAG, "takePhoto: camera not ready")
@@ -615,7 +1107,7 @@ class CameraController(
 
         synchronized(captureLock) {
             pendingCaptureCount++
-            Log.d(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
+            Log.e(TAG, "takePhoto: Starting capture (pending: $pendingCaptureCount)")
         }
 
         onCaptureStartedCallback = onCaptureStarted
@@ -743,7 +1235,7 @@ class CameraController(
 
                         // Check AE state
                         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                        Log.d(TAG, "Precapture AE state: $aeState")
+                        Log.e(TAG, "Precapture AE state: $aeState")
 
                         // Proceed with capture (flash will fire)
                         onReady()
@@ -907,7 +1399,7 @@ class CameraController(
         imageRotation: Int,
     ) {
         capturedRotation = imageRotation
-        Log.d(TAG, "ZSL capture using imageRotation=$imageRotation (currentRotation=$currentRotation)")
+        Log.e(TAG, "ZSL capture using imageRotation=$imageRotation (currentRotation=$currentRotation)")
         shutterTimestamp = System.currentTimeMillis()
         val bufferGrabLatency = shutterTimestamp - captureStartTimestamp
 
@@ -1238,7 +1730,7 @@ class CameraController(
             val shutterLatency = shutterTimestamp - captureStartTimestamp
             val saveLatency = saveCompleteTime - shutterTimestamp
             val totalLatency = saveCompleteTime - captureStartTimestamp
-            Log.d(TAG, "Benchmark [RAW]: shutter=${shutterLatency}ms, save=${saveLatency}ms, total=${totalLatency}ms")
+            Log.e(TAG, "Benchmark [RAW]: shutter=${shutterLatency}ms, save=${saveLatency}ms, total=${totalLatency}ms")
 
             synchronized(captureLock) {
                 pendingCaptureCount--
@@ -1381,13 +1873,13 @@ class CameraController(
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     val dngCreator = DngCreator(chars, captureResult)
                     val exifOrientation = getExifOrientation()
-                    Log.d(TAG, "DNG orientation: exifOrientation=$exifOrientation")
+                    Log.e(TAG, "DNG orientation: exifOrientation=$exifOrientation")
                     dngCreator.setOrientation(exifOrientation)
 
                     if (previewBitmap != null) {
                         val thumbnailBitmap = scaleBitmapForThumbnail(previewBitmap)
                         dngCreator.setThumbnail(thumbnailBitmap)
-                        Log.d(TAG, "Embedded thumbnail: ${thumbnailBitmap.width}x${thumbnailBitmap.height}")
+                        Log.e(TAG, "Embedded thumbnail: ${thumbnailBitmap.width}x${thumbnailBitmap.height}")
                         if (thumbnailBitmap !== previewBitmap) {
                             thumbnailBitmap.recycle()
                         }
@@ -1396,7 +1888,7 @@ class CameraController(
                     dngCreator.writeImage(outputStream, rawImage)
                     dngCreator.close()
                 }
-                Log.d(TAG, "DNG saved successfully: $uri")
+                Log.e(TAG, "DNG saved successfully: $uri")
             } catch (e: Exception) {
                 Log.e(TAG, "Error writing DNG", e)
                 try {
@@ -1439,7 +1931,7 @@ class CameraController(
             }
 
         val jpegOrientation = (sensorOrientation - deviceDegrees + 360) % 360
-        Log.d(TAG, "JPEG orientation: sensor=$sensorOrientation, device=$deviceDegrees, result=$jpegOrientation")
+        Log.e(TAG, "JPEG orientation: sensor=$sensorOrientation, device=$deviceDegrees, result=$jpegOrientation")
         return jpegOrientation
     }
 
@@ -1460,14 +1952,16 @@ class CameraController(
 
     fun setFlashEnabled(enabled: Boolean) {
         flashEnabled = enabled
-        Log.d(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
-        refreshFlashState()
+        Log.e(TAG, "Flash ${if (enabled) "enabled" else "disabled"}")
+        if (captureMode == CaptureMode.PHOTO) {
+            refreshFlashState()
+        }
     }
 
     fun setOisEnabled(enabled: Boolean) {
         if (oisEnabled == enabled) return
         oisEnabled = enabled
-        Log.d(TAG, "OIS ${if (enabled) "enabled" else "disabled"}")
+        Log.e(TAG, "OIS ${if (enabled) "enabled" else "disabled"}")
         updatePreview()
     }
 
@@ -1488,11 +1982,12 @@ class CameraController(
     fun setBwMode(enabled: Boolean) {
         if (bwMode == enabled) return
         bwMode = enabled
-        Log.d(TAG, "BW mode set to: $enabled")
+        Log.e(TAG, "BW mode set to: $enabled")
         applyGrayscaleFilterToPreview()
     }
 
     fun setFastMode(enabled: Boolean) {
+        if (captureMode == CaptureMode.VIDEO) return
         if (fastMode == enabled) return
 
         if (!enabled) {
@@ -1505,7 +2000,7 @@ class CameraController(
         }
 
         fastMode = enabled
-        Log.d(TAG, "Fast (hyperfocal) mode set to: $enabled - recreating session")
+        Log.e(TAG, "Fast (hyperfocal) mode set to: $enabled - recreating session")
 
         captureSession?.close()
         captureSession = null
@@ -1521,7 +2016,7 @@ class CameraController(
         }
 
         currentOutputFormat = format
-        Log.d(TAG, "Output format changed to: ${getFormatName(format)}")
+        Log.e(TAG, "Output format changed to: ${getFormatName(format)}")
     }
 
     fun setAutoExposure(
@@ -1537,7 +2032,7 @@ class CameraController(
                     exposureCompensationRange?.upper ?: 12,
                 )
         }
-        Log.d(TAG, "Auto exposure: $enabled, EC index: $exposureCompensation")
+        Log.e(TAG, "Auto exposure: $enabled, EC index: $exposureCompensation")
         updatePreview()
     }
 
@@ -1548,7 +2043,7 @@ class CameraController(
                 exposureCompensationRange?.lower ?: -12,
                 exposureCompensationRange?.upper ?: 12,
             )
-        Log.d(TAG, "Exposure compensation: $ev EV (index: $exposureCompensation)")
+        Log.e(TAG, "Exposure compensation: $ev EV (index: $exposureCompensation)")
         if (autoExposure) {
             updatePreview()
         }
@@ -1559,19 +2054,34 @@ class CameraController(
         exposureTimeNs: Long,
     ) {
         autoExposure = false
-        val maxEffectiveIso = (isoRange?.upper ?: 1600) * 32
-        manualIso =
-            iso.coerceIn(
-                isoRange?.lower ?: 100,
-                maxEffectiveIso,
-            )
-        manualExposureTimeNs =
-            exposureTimeNs.coerceIn(
-                exposureTimeRange?.lower ?: 1000000L,
-                exposureTimeRange?.upper ?: 1000000000L,
-            )
-        Log.d(TAG, "Manual exposure: ISO=$manualIso, shutter=${manualExposureTimeNs}ns")
+        if (captureMode == CaptureMode.VIDEO) {
+            manualIso =
+                iso.coerceIn(
+                    isoRange?.lower ?: 100,
+                    isoRange?.upper ?: 1600,
+                )
+            manualExposureTimeNs = getClampedVideoExposure(exposureTimeNs)
+        } else {
+            val maxEffectiveIso = (isoRange?.upper ?: 1600) * 32
+            manualIso =
+                iso.coerceIn(
+                    isoRange?.lower ?: 100,
+                    maxEffectiveIso,
+                )
+            manualExposureTimeNs =
+                exposureTimeNs.coerceIn(
+                    exposureTimeRange?.lower ?: 1000000L,
+                    exposureTimeRange?.upper ?: 1000000000L,
+                )
+        }
+        Log.e(TAG, "Manual exposure: ISO=$manualIso, shutter=${manualExposureTimeNs}ns")
         updatePreview()
+    }
+
+    private fun getClampedVideoExposure(exposureTimeNs: Long): Long {
+        val minExposure = exposureTimeRange?.lower ?: 1_000_000L
+        val maxExposure = minOf(exposureTimeRange?.upper ?: videoPreset.frameDurationNs, videoPreset.frameDurationNs)
+        return exposureTimeNs.coerceIn(minExposure, maxExposure)
     }
 
     /**
@@ -1584,7 +2094,7 @@ class CameraController(
         height: Float,
     ) {
         if (fastMode) {
-            Log.d(TAG, "Tap to focus ignored in hyperfocal mode")
+            Log.e(TAG, "Tap to focus ignored in hyperfocal mode")
             return
         }
 
@@ -1593,8 +2103,10 @@ class CameraController(
         val builder = previewRequestBuilder ?: return
 
         if (maxAfRegions <= 0) {
-            Log.d(TAG, "AF regions not supported")
-            triggerAutofocus()
+            Log.e(TAG, "AF regions not supported")
+            if (captureMode == CaptureMode.PHOTO) {
+                triggerAutofocus()
+            }
             return
         }
 
@@ -1646,23 +2158,33 @@ class CameraController(
             if (maxAeRegions > 0) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(focusRegion))
             }
-            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+            if (captureMode == CaptureMode.VIDEO) {
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+            } else {
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
 
-            session.capture(builder.build(), null, backgroundHandler)
+                session.capture(builder.build(), null, backgroundHandler)
 
-            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+            }
 
-            Log.d(TAG, "Tap to focus at ($x, $y) -> sensor ($sensorX, $sensorY)")
+            Log.e(TAG, "Tap to focus at ($x, $y) -> sensor ($sensorX, $sensorY)")
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error setting focus region", e)
         }
     }
 
     fun triggerFocus() {
+        if (captureMode == CaptureMode.VIDEO) {
+            Log.e(TAG, "Trigger focus ignored in video mode")
+            return
+        }
+
         if (fastMode) {
-            Log.d(TAG, "Trigger focus ignored in hyperfocal mode")
+            Log.e(TAG, "Trigger focus ignored in hyperfocal mode")
             return
         }
         triggerAutofocus()
@@ -1688,13 +2210,17 @@ class CameraController(
         enable: Boolean,
         tempEv: Float? = null,
     ) {
+        if (captureMode == CaptureMode.VIDEO) {
+            return
+        }
+
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         val characteristics = cameraCharacteristics ?: return
 
         val maxAeRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
         if (maxAeRegions == 0) {
-            Log.d(TAG, "Device doesn't support AE regions")
+            Log.e(TAG, "Device doesn't support AE regions")
             return
         }
 
@@ -1720,10 +2246,10 @@ class CameraController(
                     )
 
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRegion))
-                Log.d(TAG, "Center spot metering enabled (${spotSize * 2}px region)")
+                Log.e(TAG, "Center spot metering enabled (${spotSize * 2}px region)")
             } else {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
-                Log.d(TAG, "Center spot metering disabled")
+                Log.e(TAG, "Center spot metering disabled")
             }
 
             if (tempEv != null && autoExposure) {
@@ -1734,7 +2260,7 @@ class CameraController(
                         exposureCompensationRange?.upper ?: 12,
                     )
                 builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, tempEc)
-                Log.d(TAG, "Temporary EV set to $tempEv (index: $tempEc)")
+                Log.e(TAG, "Temporary EV set to $tempEv (index: $tempEc)")
             }
 
             session.capture(builder.build(), null, backgroundHandler)
@@ -1750,7 +2276,7 @@ class CameraController(
 
     private fun applyGrayscaleFilterToPreview() {
         val tv = textureView ?: return
-        val shouldApply = bwMode || monoFlavor
+        val shouldApply = monoFlavor || (captureMode == CaptureMode.PHOTO && bwMode)
 
         tv.post {
             if (!shouldApply) {
@@ -1759,7 +2285,7 @@ class CameraController(
                 } else {
                     tv.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
                 }
-                Log.d(TAG, "Cleared grayscale filter from preview")
+                Log.e(TAG, "Cleared grayscale filter from preview")
                 return@post
             }
 
@@ -1794,27 +2320,29 @@ class CameraController(
                         android.graphics.ColorMatrixColorFilter(colorMatrix),
                     )
                 tv.setRenderEffect(effect)
-                Log.d(TAG, "Applied grayscale RenderEffect to preview")
+                Log.e(TAG, "Applied grayscale RenderEffect to preview")
             } else {
                 val paint =
                     android.graphics.Paint().apply {
                         colorFilter = GrayscaleConverter.getColorFilter()
                     }
                 tv.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
-                Log.d(TAG, "Applied grayscale filter to preview (legacy)")
+                Log.e(TAG, "Applied grayscale filter to preview (legacy)")
             }
         }
     }
 
     fun hasPendingCaptures(): Boolean {
         synchronized(captureLock) {
-            return pendingCaptureCount > 0
+            return pendingCaptureCount > 0 || pendingVideoRecordingStart
         }
     }
 
     fun shutdown() {
         try {
             cameraOpenCloseLock.acquire()
+
+            stopVideoRecordingInternal()
 
             synchronized(zslLock) {
                 latestZslImage?.close()
@@ -1851,12 +2379,20 @@ class CameraController(
         stopBackgroundThread()
         coroutineScope.cancel()
         conversionExecutor.shutdownNow()
+        sessionExecutor.shutdownNow()
         try {
             if (!conversionExecutor.awaitTermination(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "Conversion executor did not terminate in time")
             }
         } catch (e: InterruptedException) {
             Log.w(TAG, "Interrupted while awaiting executor termination")
+        }
+        try {
+            if (!sessionExecutor.awaitTermination(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Session executor did not terminate in time")
+            }
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Interrupted while awaiting session executor termination")
         }
 
         synchronized(captureLock) {
@@ -1865,7 +2401,7 @@ class CameraController(
             }
         }
 
-        Log.d(TAG, "Camera shutdown complete")
+        Log.e(TAG, "Camera shutdown complete")
     }
 
     private fun postToast(message: String) {

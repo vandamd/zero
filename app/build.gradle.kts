@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jlleitschuh.gradle.ktlint")
 }
+
+val localProps =
+    Properties().apply {
+        val localPropsFile = rootProject.file("local.properties")
+        if (localPropsFile.exists()) {
+            localPropsFile.inputStream().use(::load)
+        }
+    }
+
+val hasReleaseSigningConfig =
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { key ->
+        !localProps.getProperty(key).isNullOrBlank()
+    }
 
 ktlint {
     version.set("1.8.0")
@@ -15,6 +30,17 @@ ktlint {
 android {
     namespace = "com.vandam.zero"
     compileSdk = 35
+
+    if (hasReleaseSigningConfig) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(localProps.getProperty("storeFile"))
+                storePassword = localProps.getProperty("storePassword")
+                keyAlias = localProps.getProperty("keyAlias")
+                keyPassword = localProps.getProperty("keyPassword")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.vandam.zero"
@@ -40,6 +66,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig =
+                if (hasReleaseSigningConfig) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
 
             isDebuggable = false
             isJniDebuggable = false

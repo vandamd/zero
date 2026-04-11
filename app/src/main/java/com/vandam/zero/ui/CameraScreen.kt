@@ -5,7 +5,6 @@ import android.os.Build
 import android.view.TextureView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,6 +58,7 @@ import com.vandam.zero.BuildConfig
 import com.vandam.zero.CameraViewModel
 import com.vandam.zero.R
 import com.vandam.zero.camera.CameraController
+import com.vandam.zero.camera.CaptureMode
 import com.vandam.zero.ui.components.Crosshair
 import com.vandam.zero.ui.components.ExposureSlider
 import com.vandam.zero.ui.components.GridOverlay
@@ -81,7 +82,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val permissions =
-        mutableListOf(Manifest.permission.CAMERA).apply {
+        mutableListOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).apply {
             if (Build.VERSION.SDK_INT <= 28) {
                 add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             }
@@ -114,7 +115,7 @@ private fun PermissionDeniedContent() {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "Camera permission is required to use this app.",
+            text = "Camera and microphone permissions are required to use this app.",
             color = CameraColors.onSurface,
             textAlign = TextAlign.Center,
             style = CameraTypography.permissionText,
@@ -160,6 +161,7 @@ private fun CameraContent(viewModel: CameraViewModel) {
 private data class CameraUiState(
     val showFlash: Boolean,
     val crosshairPosition: Pair<Float, Float>?,
+    val captureMode: CaptureMode,
     val gridEnabled: Boolean,
     val sliderMode: CameraViewModel.SliderMode,
     val exposureMode: CameraViewModel.ExposureMode,
@@ -170,12 +172,16 @@ private data class CameraUiState(
     val shutterRange: LongRange,
     val isFocusButtonHeld: Boolean,
     val outputFormat: Int,
+    val videoPresetLabel: String,
+    val availableVideoPresetCount: Int,
     val flashEnabled: Boolean,
     val previewEnabled: Boolean,
     val toastMessage: String?,
     val colorMode: Boolean,
     val isCapturing: Boolean,
     val isSaving: Boolean,
+    val isRecording: Boolean,
+    val recordingElapsedMs: Long,
     val capturedImageBitmap: android.graphics.Bitmap?,
     val capturedImageIsPortrait: Boolean,
     val isFastMode: Boolean,
@@ -185,6 +191,7 @@ private data class CameraUiState(
     val isMetering: Boolean,
 ) {
     val isBusy: Boolean get() = isCapturing || isSaving
+    val isVideoMode: Boolean get() = captureMode == CaptureMode.VIDEO
     val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
     val exposureText: String get() = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
     val textColor: androidx.compose.ui.graphics.Color
@@ -200,6 +207,7 @@ private data class CameraUiState(
 private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val showFlash by viewModel.shutterFlash.collectAsState()
     val crosshairPosition by viewModel.crosshairPosition.collectAsState()
+    val captureMode by viewModel.captureMode.collectAsState()
     val gridEnabled by viewModel.gridEnabled.collectAsState()
     val sliderMode by viewModel.sliderMode.collectAsState()
     val exposureMode by viewModel.exposureMode.collectAsState()
@@ -210,12 +218,16 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val shutterRange by viewModel.shutterRange.collectAsState()
     val isFocusButtonHeld by viewModel.isFocusButtonHeld.collectAsState()
     val outputFormat by viewModel.outputFormat.collectAsState()
+    val videoPreset by viewModel.videoPreset.collectAsState()
+    val availableVideoPresets by viewModel.availableVideoPresets.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
     val previewEnabled by viewModel.previewEnabled.collectAsState()
     val toastMessage by viewModel.toastMessage.collectAsState()
     val colorMode by viewModel.colorMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
+    val isRecording by viewModel.isRecording.collectAsState()
+    val recordingElapsedMs by viewModel.recordingElapsedMs.collectAsState()
     val capturedImageBitmap by viewModel.capturedImageBitmap.collectAsState()
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
     val isFastMode by viewModel.isFastMode.collectAsState()
@@ -227,6 +239,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     return CameraUiState(
         showFlash = showFlash,
         crosshairPosition = crosshairPosition,
+        captureMode = captureMode,
         gridEnabled = gridEnabled,
         sliderMode = sliderMode,
         exposureMode = exposureMode,
@@ -237,12 +250,16 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         shutterRange = shutterRange,
         isFocusButtonHeld = isFocusButtonHeld,
         outputFormat = outputFormat,
+        videoPresetLabel = videoPreset.label,
+        availableVideoPresetCount = availableVideoPresets.size,
         flashEnabled = flashEnabled,
         previewEnabled = previewEnabled,
         toastMessage = toastMessage,
         colorMode = colorMode,
         isCapturing = isCapturing,
         isSaving = isSaving,
+        isRecording = isRecording,
+        recordingElapsedMs = recordingElapsedMs,
         capturedImageBitmap = capturedImageBitmap,
         capturedImageIsPortrait = capturedImageIsPortrait,
         isFastMode = isFastMode,
@@ -456,51 +473,64 @@ private fun SettingsButtons(
         ToolbarTextButton(
             text = if (uiState.exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
             color = uiState.textColor,
-            enabled = !uiState.isBusy,
+            enabled = !uiState.isBusy && !uiState.isRecording,
             onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleExposureMode()
             },
         )
 
-        ToolbarTextButton(
-            text =
-                if (uiState.isRawMode) {
-                    "RGB"
-                } else if (uiState.colorMode) {
-                    "BW"
-                } else {
-                    "RGB"
-                },
-            color = uiState.textColor,
-            enabled = !uiState.isBusy,
-            alpha = if (uiState.isRawMode) 0.3f else 1f,
-            onTap = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.toggleColorMode()
-            },
-            onLongPress = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.toggleOis()
-            },
-            tapEnabled = !uiState.isRawMode,
-        )
-
-        if (!BuildConfig.MONOCHROME_MODE) {
+        if (uiState.isVideoMode) {
             ToolbarTextButton(
-                text = viewModel.getFormatName(uiState.outputFormat, fastMode = uiState.isFastMode),
+                text = uiState.videoPresetLabel,
                 color = uiState.textColor,
-                enabled = !uiState.isBusy,
+                enabled = !uiState.isBusy && !uiState.isRecording,
                 onTap = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.toggleOutputFormat()
+                    viewModel.toggleVideoPreset()
+                },
+                tapEnabled = uiState.availableVideoPresetCount > 1,
+            )
+        } else {
+            ToolbarTextButton(
+                text =
+                    if (uiState.isRawMode) {
+                        "RGB"
+                    } else if (uiState.colorMode) {
+                        "BW"
+                    } else {
+                        "RGB"
+                    },
+                color = uiState.textColor,
+                enabled = !uiState.isBusy,
+                alpha = if (uiState.isRawMode) 0.3f else 1f,
+                onTap = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.toggleColorMode()
                 },
                 onLongPress = {
-                    if (viewModel.toggleRedTextMode()) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.toggleOis()
                 },
+                tapEnabled = !uiState.isRawMode,
             )
+
+            if (!BuildConfig.MONOCHROME_MODE) {
+                ToolbarTextButton(
+                    text = viewModel.getFormatName(uiState.outputFormat, fastMode = uiState.isFastMode),
+                    color = uiState.textColor,
+                    enabled = !uiState.isBusy,
+                    onTap = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.toggleOutputFormat()
+                    },
+                    onLongPress = {
+                        if (viewModel.toggleRedTextMode()) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    },
+                )
+            }
         }
 
         ToolbarIconButton(
@@ -510,17 +540,19 @@ private fun SettingsButtons(
                 } else {
                     R.drawable.flash_off_stroke_rounded
                 },
-            contentDescription = "Toggle flash",
+            contentDescription = if (uiState.isVideoMode) "Toggle torch" else "Toggle flash",
             tint = uiState.textColor,
             onTap = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.toggleFlash()
             },
             onLongPress = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.toggleCameraHidden()
+                if (!uiState.isVideoMode) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.toggleCameraHidden()
+                }
             },
-            tapEnabled = !uiState.isFastMode,
+            tapEnabled = uiState.isVideoMode || !uiState.isFastMode,
         )
 
         ToolbarIconButton(
@@ -537,8 +569,10 @@ private fun SettingsButtons(
                 viewModel.toggleGrid()
             },
             onLongPress = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.togglePreview()
+                if (!uiState.isVideoMode) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.togglePreview()
+                }
             },
         )
     }
@@ -557,14 +591,15 @@ private fun ToolbarTextButton(
     onLongPress: (() -> Unit)? = null,
     tapEnabled: Boolean = true,
 ) {
+    val canTap = enabled && tapEnabled
     Box(
         modifier =
             Modifier
                 .rotateVertically(clockwise = true)
-                .pointerInput(tapEnabled) {
+                .pointerInput(canTap) {
                     detectTapGestures(
-                        onTap = { if (tapEnabled) onTap() },
-                        onLongPress = { onLongPress?.invoke() },
+                        onTap = { if (canTap) onTap() },
+                        onLongPress = { if (enabled) onLongPress?.invoke() },
                     )
                 },
         contentAlignment = Alignment.Center,
@@ -572,7 +607,7 @@ private fun ToolbarTextButton(
         Text(
             text = text,
             style = CameraTypography.toolbarText,
-            color = color.copy(alpha = alpha),
+            color = color.copy(alpha = if (enabled) alpha else 0.3f),
         )
     }
 }
@@ -650,7 +685,7 @@ private fun CameraPreviewArea(
             }
         }
 
-        if (!uiState.uiHidden) {
+        if (!uiState.uiHidden && !uiState.isRecording) {
             SliderPanel(
                 sliderMode = uiState.sliderMode,
                 exposureValue = uiState.exposureValue,
@@ -679,7 +714,7 @@ private fun CameraPreviewArea(
             onFlashComplete = { viewModel.resetShutterFlash() },
         )
 
-        if (uiState.previewEnabled && !uiState.uiHidden) {
+        if (!uiState.isVideoMode && uiState.previewEnabled && !uiState.uiHidden) {
             CapturedImagePreview(
                 bitmap = uiState.capturedImageBitmap,
                 isPortrait = uiState.capturedImageIsPortrait,
@@ -846,6 +881,22 @@ private fun StatusPanel(
     modifier: Modifier = Modifier,
     showStatusText: Boolean = true,
 ) {
+    val statusText =
+        if (uiState.isVideoMode) {
+            when {
+                uiState.isSaving -> "SAVING"
+                uiState.isRecording -> formatRecordingElapsed(uiState.recordingElapsedMs)
+                else -> "READY"
+            }
+        } else {
+            when {
+                uiState.isMetering -> "METERING"
+                uiState.isCapturing -> "HOLD"
+                uiState.isSaving -> "SAVING"
+                else -> "READY"
+            }
+        }
+
     Column(
         modifier =
             modifier
@@ -856,36 +907,53 @@ private fun StatusPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box {
-            uiState.toastMessage?.let { message ->
-                Text(
-                    text = message,
-                    color = uiState.textColor,
-                    style = CameraTypography.toolbarText,
-                    modifier = Modifier.rotateVertically(clockwise = true),
-                )
+            if (uiState.isVideoMode) {
+                uiState.toastMessage?.let { message ->
+                    Text(
+                        text = message,
+                        color = uiState.textColor,
+                        style = CameraTypography.toolbarText,
+                        modifier = Modifier.rotateVertically(clockwise = true),
+                    )
 
-                LaunchedEffect(message) {
-                    delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
-                    viewModel.clearToastMessage()
+                    LaunchedEffect(message) {
+                        delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
+                        viewModel.clearToastMessage()
+                    }
+                }
+            } else {
+                uiState.toastMessage?.let { message ->
+                    Text(
+                        text = message,
+                        color = uiState.textColor,
+                        style = CameraTypography.toolbarText,
+                        modifier = Modifier.rotateVertically(clockwise = true),
+                    )
+
+                    LaunchedEffect(message) {
+                        delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
+                        viewModel.clearToastMessage()
+                    }
                 }
             }
         }
 
         if (showStatusText) {
             Text(
-                text =
-                    when {
-                        uiState.isMetering -> "METERING"
-                        uiState.isCapturing -> "HOLD"
-                        uiState.isSaving -> "SAVING"
-                        else -> "READY"
-                    },
+                text = statusText,
                 color = uiState.textColor,
                 style = CameraTypography.toolbarText,
                 modifier = Modifier.rotateVertically(clockwise = true),
             )
         }
     }
+}
+
+private fun formatRecordingElapsed(elapsedMs: Long): String {
+    val totalSeconds = elapsedMs / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
 }
 
 /**
