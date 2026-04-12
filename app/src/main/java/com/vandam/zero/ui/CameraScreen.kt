@@ -150,6 +150,7 @@ private fun CameraContent(viewModel: CameraViewModel) {
                 uiState = uiState,
                 viewModel = viewModel,
                 haptic = haptic,
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -186,6 +187,7 @@ private data class CameraUiState(
     val capturedImageIsPortrait: Boolean,
     val isFastMode: Boolean,
     val cameraHidden: Boolean,
+    val viewfinderReady: Boolean,
     val uiHidden: Boolean,
     val redTextMode: Boolean,
     val isMetering: Boolean,
@@ -232,6 +234,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
     val isFastMode by viewModel.isFastMode.collectAsState()
     val cameraHidden by viewModel.cameraHidden.collectAsState()
+    val viewfinderReady by viewModel.viewfinderReady.collectAsState()
     val uiHidden by viewModel.uiHidden.collectAsState()
     val redTextMode by viewModel.redTextMode.collectAsState()
     val isMetering by viewModel.isMetering.collectAsState()
@@ -264,6 +267,7 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         capturedImageIsPortrait = capturedImageIsPortrait,
         isFastMode = isFastMode,
         cameraHidden = cameraHidden,
+        viewfinderReady = viewfinderReady,
         uiHidden = uiHidden,
         redTextMode = redTextMode,
         isMetering = isMetering,
@@ -653,10 +657,11 @@ private fun CameraPreviewArea(
     uiState: CameraUiState,
     viewModel: CameraViewModel,
     haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
+    modifier: Modifier = Modifier,
 ) {
     Box(
         modifier =
-            Modifier
+            modifier
                 .fillMaxHeight()
                 .background(CameraColors.background)
                 .onSizeChanged { size ->
@@ -771,9 +776,15 @@ private fun CameraTextureView(
         modifier =
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = if (uiState.showFlash || uiState.cameraHidden || uiState.uiHidden) 0f else 1f }
-                .pointerInput(uiState.cameraHidden, uiState.uiHidden) {
-                    if (!uiState.cameraHidden && !uiState.uiHidden) {
+                .graphicsLayer {
+                    alpha =
+                        if (uiState.showFlash || uiState.cameraHidden || uiState.uiHidden || !uiState.viewfinderReady) {
+                            0f
+                        } else {
+                            1f
+                        }
+                }.pointerInput(uiState.cameraHidden, uiState.uiHidden, uiState.viewfinderReady) {
+                    if (!uiState.cameraHidden && !uiState.uiHidden && uiState.viewfinderReady) {
                         detectTapGestures { offset ->
                             viewModel.onTapToFocus(
                                 offset.x,
@@ -881,19 +892,20 @@ private fun StatusPanel(
     modifier: Modifier = Modifier,
     showStatusText: Boolean = true,
 ) {
+    val readyStatusText = if (uiState.viewfinderReady) "READY" else "LOADING"
     val statusText =
         if (uiState.isVideoMode) {
             when {
                 uiState.isSaving -> "SAVING"
                 uiState.isRecording -> formatRecordingElapsed(uiState.recordingElapsedMs)
-                else -> "READY"
+                else -> readyStatusText
             }
         } else {
             when {
                 uiState.isMetering -> "METERING"
                 uiState.isCapturing -> "HOLD"
                 uiState.isSaving -> "SAVING"
-                else -> "READY"
+                else -> readyStatusText
             }
         }
 

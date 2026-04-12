@@ -104,6 +104,9 @@ class CameraViewModel : ViewModel() {
     private val _cameraHidden = MutableStateFlow(false)
     val cameraHidden: StateFlow<Boolean> = _cameraHidden
 
+    private val _viewfinderReady = MutableStateFlow(false)
+    val viewfinderReady: StateFlow<Boolean> = _viewfinderReady
+
     private val _redTextMode = MutableStateFlow(false)
     val redTextMode: StateFlow<Boolean> = _redTextMode
 
@@ -686,6 +689,7 @@ class CameraViewModel : ViewModel() {
         if (cameraController == null) {
             cameraController = CameraController(context)
         }
+        _viewfinderReady.value = false
         return cameraController!!.createPreviewView(context)
     }
 
@@ -696,6 +700,7 @@ class CameraViewModel : ViewModel() {
 
         if (cameraController == null) {
             cameraController = CameraController(context)
+            _viewfinderReady.value = false
         }
 
         setupOrientationListener(context)
@@ -762,6 +767,7 @@ class CameraViewModel : ViewModel() {
                 cameraController?.getExposureTimeRange()?.let { nativeShutterRange = it }
                 updateRangesForCurrentMode()
                 applyModeSettingsToController()
+                _viewfinderReady.value = true
             },
         )
     }
@@ -1127,6 +1133,7 @@ class CameraViewModel : ViewModel() {
 
     fun onPause() {
         orientationEventListener?.disable()
+        _viewfinderReady.value = false
         _isCapturing.value = false
         _isSaving.value = false
         _isRecording.value = false
@@ -1141,6 +1148,7 @@ class CameraViewModel : ViewModel() {
 
         if (cameraController == null) {
             cameraController = CameraController(context)
+            _viewfinderReady.value = false
         }
 
         setupOrientationListener(context)

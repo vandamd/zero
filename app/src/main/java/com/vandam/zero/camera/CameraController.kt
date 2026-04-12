@@ -47,6 +47,10 @@ class CameraController(
 
         private const val HYPERFOCAL_DIOPTERS = 0.45f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
+        private const val PREVIEW_TRANSFORM_FRAME_RETRIES = 3
+        private const val INITIAL_PREVIEW_SESSION_REFRESH_DELAY_MS = 250L
+        private const val PREVIEW_READY_FRAME_UPDATES = 2
+        private const val PREVIEW_READY_TIMEOUT_MS = 1000L
 
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val JPEG_QUALITY = 95
@@ -89,6 +93,13 @@ class CameraController(
     private var textureView: TextureView? = null
     private var previewSurface: Surface? = null
     private var previewSize: Size? = null
+
+    @Volatile private var isOpeningCamera: Boolean = false
+    private var previewTransformFramesRemaining: Int = 0
+    private var didRefreshInitialPreviewSession: Boolean = false
+    private var pendingReadySession: CameraCaptureSession? = null
+    private var previewFramesUntilReady: Int = 0
+    private var previewReadyTimeoutJob: kotlinx.coroutines.Job? = null
 
     private var captureMode: CaptureMode = CaptureMode.PHOTO
     private var currentOutputFormat: Int = OUTPUT_FORMAT_JPEG
@@ -174,7 +185,8 @@ class CameraController(
                 height: Int,
             ) {
                 Log.e(TAG, "Surface texture available: ${width}x$height")
-                openCamera()
+                schedulePreviewTransform()
+                openCameraIfNeeded()
             }
 
             override fun onSurfaceTextureSizeChanged(
@@ -183,6 +195,11 @@ class CameraController(
                 height: Int,
             ) {
                 Log.e(TAG, "Surface texture size changed: ${width}x$height")
+                updatePreviewSize(width, height)
+                schedulePreviewTransform()
+                if (cameraDevice != null && captureSession != null) {
+                    recreateCaptureSession()
+                }
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
@@ -191,6 +208,11 @@ class CameraController(
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                if (previewTransformFramesRemaining > 0) {
+                    applyPreviewTransform()
+                    previewTransformFramesRemaining--
+                }
+                handlePreviewFrameUpdated()
             }
         }
 
@@ -210,11 +232,10 @@ class CameraController(
         this.onVideoStopReadyCallback = null
         this.onFormatsAvailableCallback = onFormatsAvailable
         this.onVideoPresetsAvailableCallback = onVideoPresetsAvailable
+        textureView.surfaceTextureListener = surfaceTextureListener
 
         if (textureView.isAvailable) {
-            openCamera()
-        } else {
-            textureView.surfaceTextureListener = surfaceTextureListener
+            openCameraIfNeeded()
         }
     }
 
@@ -236,8 +257,17 @@ class CameraController(
         }
     }
 
+    private fun openCameraIfNeeded() {
+        if (cameraDevice != null || isOpeningCamera) return
+
+        openCamera()
+    }
+
     @Suppress("MissingPermission")
     private fun openCamera() {
+        if (cameraDevice != null || isOpeningCamera) return
+
+        isOpeningCamera = true
         startBackgroundThread()
 
         cameraId =
@@ -248,6 +278,7 @@ class CameraController(
 
         if (cameraId == null) {
             Log.e(TAG, "No back camera found")
+            isOpeningCamera = false
             return
         }
 
@@ -291,6 +322,7 @@ class CameraController(
         setupImageReaders(chars, map)
 
         if (!cameraOpenCloseLock.tryAcquire(CAMERA_OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            isOpeningCamera = false
             throw RuntimeException("Timeout waiting to open camera")
         }
 
@@ -298,6 +330,7 @@ class CameraController(
             cameraManager.openCamera(cameraId!!, stateCallback, backgroundHandler)
         } catch (e: Exception) {
             Log.e(TAG, "Error opening camera", e)
+            isOpeningCamera = false
             cameraOpenCloseLock.release()
         }
     }
@@ -378,9 +411,110 @@ class CameraController(
                     }, backgroundHandler)
                 }
 
+        updatePreviewSize()
+    }
+
+    private fun updatePreviewSize(
+        targetWidth: Int = textureView?.width ?: 1080,
+        targetHeight: Int = textureView?.height ?: 1920,
+    ) {
+        val map = cameraCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val displaySizes = map?.getOutputSizes(SurfaceTexture::class.java)
-        previewSize = chooseOptimalPreviewSize(displaySizes, textureView?.width ?: 1080, textureView?.height ?: 1920)
+        previewSize = chooseOptimalPreviewSize(displaySizes, targetWidth, targetHeight)
         Log.e(TAG, "Preview size: ${previewSize?.width}x${previewSize?.height}")
+    }
+
+    private fun schedulePreviewTransform() {
+        previewTransformFramesRemaining = PREVIEW_TRANSFORM_FRAME_RETRIES
+        applyPreviewTransform()
+    }
+
+    private fun applyPreviewTransform() {
+        val view = textureView ?: return
+        view.post {
+            if (textureView !== view) return@post
+            applyPreviewTransform(view)
+        }
+    }
+
+    private fun applyPreviewTransform(view: TextureView) {
+        val preview = previewSize ?: return
+        val chars = cameraCharacteristics ?: return
+        val viewWidth = view.width
+        val viewHeight = view.height
+        if (viewWidth <= 0 || viewHeight <= 0) return
+
+        val displayRotation = view.display?.rotation ?: Surface.ROTATION_0
+        val displayRotationDegrees = displayRotation * 90
+        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val isRotationRequired = computeRelativeRotation(chars, displayRotationDegrees) % 180 != 0
+
+        val scaleX: Float
+        val scaleY: Float
+        if (sensorOrientation == 0) {
+            scaleX =
+                if (isRotationRequired) {
+                    viewWidth.toFloat() / preview.width
+                } else {
+                    viewWidth.toFloat() / preview.height
+                }
+            scaleY =
+                if (isRotationRequired) {
+                    viewHeight.toFloat() / preview.height
+                } else {
+                    viewHeight.toFloat() / preview.width
+                }
+        } else {
+            scaleX =
+                if (isRotationRequired) {
+                    viewWidth.toFloat() / preview.height
+                } else {
+                    viewWidth.toFloat() / preview.width
+                }
+            scaleY =
+                if (isRotationRequired) {
+                    viewHeight.toFloat() / preview.width
+                } else {
+                    viewHeight.toFloat() / preview.height
+                }
+        }
+
+        val finalScale = maxOf(scaleX, scaleY)
+        val centerX = viewWidth / 2f
+        val centerY = viewHeight / 2f
+        val matrix = Matrix()
+        if (isRotationRequired) {
+            matrix.setScale(
+                finalScale / scaleX,
+                finalScale / scaleY,
+                centerX,
+                centerY,
+            )
+        } else {
+            matrix.setScale(
+                viewHeight / viewWidth.toFloat() / scaleY * finalScale,
+                viewWidth / viewHeight.toFloat() / scaleX * finalScale,
+                centerX,
+                centerY,
+            )
+        }
+        matrix.postRotate(-displayRotationDegrees.toFloat(), centerX, centerY)
+
+        view.setTransform(matrix)
+    }
+
+    private fun computeRelativeRotation(
+        chars: CameraCharacteristics,
+        deviceOrientationDegrees: Int,
+    ): Int {
+        val sensorOrientationDegrees = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val sign =
+            if (chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) {
+                1
+            } else {
+                -1
+            }
+        return (sensorOrientationDegrees - deviceOrientationDegrees * sign + 360) % 360
     }
 
     private fun choosePreviewYuvSize(
@@ -473,12 +607,14 @@ class CameraController(
     private val stateCallback =
         object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
-                cameraOpenCloseLock.release()
                 cameraDevice = camera
+                isOpeningCamera = false
+                cameraOpenCloseLock.release()
                 createCaptureSession()
             }
 
             override fun onDisconnected(camera: CameraDevice) {
+                isOpeningCamera = false
                 cameraOpenCloseLock.release()
                 camera.close()
                 cameraDevice = null
@@ -488,6 +624,7 @@ class CameraController(
                 camera: CameraDevice,
                 error: Int,
             ) {
+                isOpeningCamera = false
                 cameraOpenCloseLock.release()
                 camera.close()
                 cameraDevice = null
@@ -563,6 +700,10 @@ class CameraController(
 
     private fun recreateCaptureSession() {
         Log.e(TAG, "RECREATE: closing existing session=$captureSession")
+        previewReadyTimeoutJob?.cancel()
+        previewReadyTimeoutJob = null
+        pendingReadySession = null
+        previewFramesUntilReady = 0
         previewRequestBuilder = null
         captureSession?.close()
         captureSession = null
@@ -577,6 +718,7 @@ class CameraController(
         val preview = previewSize ?: return
 
         texture.setDefaultBufferSize(preview.width, preview.height)
+        schedulePreviewTransform()
         previewSurface?.release()
         previewSurface = Surface(texture)
         val recorderSurfaceForSession =
@@ -631,11 +773,8 @@ class CameraController(
                         }
 
                         applyGrayscaleFilterToPreview()
-
-                        coroutineScope.launch(Dispatchers.Main) {
-                            onCameraReadyCallback?.invoke()
-                            onVideoStopReadyCallback?.invoke()
-                            onVideoStopReadyCallback = null
+                        if (!scheduleInitialPreviewSessionRefresh(session)) {
+                            notifyConfiguredSessionReadyAfterPreviewFrame(session)
                         }
                     }
 
@@ -671,6 +810,65 @@ class CameraController(
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error creating capture session", e)
         }
+    }
+
+    private fun notifyConfiguredSessionReady() {
+        previewReadyTimeoutJob?.cancel()
+        previewReadyTimeoutJob = null
+        pendingReadySession = null
+        previewFramesUntilReady = 0
+
+        coroutineScope.launch(Dispatchers.Main) {
+            onCameraReadyCallback?.invoke()
+            onVideoStopReadyCallback?.invoke()
+            onVideoStopReadyCallback = null
+        }
+    }
+
+    private fun notifyConfiguredSessionReadyAfterPreviewFrame(session: CameraCaptureSession) {
+        pendingReadySession = session
+        previewFramesUntilReady = PREVIEW_READY_FRAME_UPDATES
+        previewReadyTimeoutJob?.cancel()
+        previewReadyTimeoutJob =
+            coroutineScope.launch {
+                delay(PREVIEW_READY_TIMEOUT_MS)
+                if (pendingReadySession === session && captureSession === session) {
+                    Log.e(TAG, "Preview ready fallback after waiting for fresh frame")
+                    notifyConfiguredSessionReady()
+                }
+            }
+    }
+
+    private fun handlePreviewFrameUpdated() {
+        val session = pendingReadySession ?: return
+        if (captureSession !== session) return
+
+        applyPreviewTransform()
+        previewFramesUntilReady--
+        if (previewFramesUntilReady <= 0) {
+            notifyConfiguredSessionReady()
+        }
+    }
+
+    private fun scheduleInitialPreviewSessionRefresh(configuredSession: CameraCaptureSession): Boolean {
+        if (didRefreshInitialPreviewSession || pendingVideoRecordingStart || isVideoRecording) return false
+
+        didRefreshInitialPreviewSession = true
+        coroutineScope.launch {
+            delay(INITIAL_PREVIEW_SESSION_REFRESH_DELAY_MS)
+            if (captureSession !== configuredSession) return@launch
+            if (cameraDevice == null || textureView?.isAvailable != true) return@launch
+            if (pendingVideoRecordingStart || isVideoRecording) {
+                notifyConfiguredSessionReady()
+                return@launch
+            }
+
+            Log.e(TAG, "Refreshing initial preview session after first layout/frame pass")
+            updatePreviewSize()
+            schedulePreviewTransform()
+            recreateCaptureSession()
+        }
+        return true
     }
 
     private fun startPreview(): Boolean {
@@ -2464,6 +2662,10 @@ class CameraController(
             cameraOpenCloseLock.acquire()
 
             stopVideoRecordingInternal()
+            previewReadyTimeoutJob?.cancel()
+            previewReadyTimeoutJob = null
+            pendingReadySession = null
+            previewFramesUntilReady = 0
 
             synchronized(zslLock) {
                 latestZslImage?.close()
