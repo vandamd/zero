@@ -48,7 +48,7 @@ class CameraController(
         private const val HYPERFOCAL_DIOPTERS = 0.45f
         private const val CAMERA_OPEN_TIMEOUT_MS = 2500L
         private const val PREVIEW_TRANSFORM_FRAME_RETRIES = 3
-        private const val INITIAL_PREVIEW_SESSION_REFRESH_DELAY_MS = 250L
+        private const val INITIAL_PREVIEW_SESSION_REFRESH_TIMEOUT_MS = 250L
         private const val PREVIEW_READY_FRAME_UPDATES = 2
         private const val PREVIEW_READY_TIMEOUT_MS = 1000L
 
@@ -97,6 +97,8 @@ class CameraController(
     @Volatile private var isOpeningCamera: Boolean = false
     private var previewTransformFramesRemaining: Int = 0
     private var didRefreshInitialPreviewSession: Boolean = false
+    private var pendingInitialRefreshSession: CameraCaptureSession? = null
+    private var initialPreviewRefreshTimeoutJob: kotlinx.coroutines.Job? = null
     private var pendingReadySession: CameraCaptureSession? = null
     private var previewFramesUntilReady: Int = 0
     private var previewReadyTimeoutJob: kotlinx.coroutines.Job? = null
@@ -212,6 +214,7 @@ class CameraController(
                     applyPreviewTransform()
                     previewTransformFramesRemaining--
                 }
+                handleInitialPreviewRefreshFrameUpdated()
                 handlePreviewFrameUpdated()
             }
         }
@@ -700,6 +703,7 @@ class CameraController(
 
     private fun recreateCaptureSession() {
         Log.e(TAG, "RECREATE: closing existing session=$captureSession")
+        clearInitialPreviewSessionRefresh()
         previewReadyTimeoutJob?.cancel()
         previewReadyTimeoutJob = null
         pendingReadySession = null
@@ -850,25 +854,49 @@ class CameraController(
         }
     }
 
+    private fun handleInitialPreviewRefreshFrameUpdated() {
+        val session = pendingInitialRefreshSession ?: return
+        if (captureSession !== session) return
+
+        refreshInitialPreviewSession(session)
+    }
+
     private fun scheduleInitialPreviewSessionRefresh(configuredSession: CameraCaptureSession): Boolean {
         if (didRefreshInitialPreviewSession || pendingVideoRecordingStart || isVideoRecording) return false
 
         didRefreshInitialPreviewSession = true
-        coroutineScope.launch {
-            delay(INITIAL_PREVIEW_SESSION_REFRESH_DELAY_MS)
-            if (captureSession !== configuredSession) return@launch
-            if (cameraDevice == null || textureView?.isAvailable != true) return@launch
-            if (pendingVideoRecordingStart || isVideoRecording) {
-                notifyConfiguredSessionReady()
-                return@launch
+        pendingInitialRefreshSession = configuredSession
+        initialPreviewRefreshTimeoutJob?.cancel()
+        initialPreviewRefreshTimeoutJob =
+            coroutineScope.launch {
+                delay(INITIAL_PREVIEW_SESSION_REFRESH_TIMEOUT_MS)
+                refreshInitialPreviewSession(configuredSession)
             }
-
-            Log.e(TAG, "Refreshing initial preview session after first layout/frame pass")
-            updatePreviewSize()
-            schedulePreviewTransform()
-            recreateCaptureSession()
-        }
         return true
+    }
+
+    private fun refreshInitialPreviewSession(configuredSession: CameraCaptureSession) {
+        if (pendingInitialRefreshSession !== configuredSession) return
+
+        clearInitialPreviewSessionRefresh()
+        if (captureSession !== configuredSession) return
+        if (cameraDevice == null || textureView?.isAvailable != true) return
+
+        if (pendingVideoRecordingStart || isVideoRecording) {
+            notifyConfiguredSessionReady()
+            return
+        }
+
+        Log.e(TAG, "Refreshing initial preview session after first layout/frame pass")
+        updatePreviewSize()
+        schedulePreviewTransform()
+        recreateCaptureSession()
+    }
+
+    private fun clearInitialPreviewSessionRefresh() {
+        initialPreviewRefreshTimeoutJob?.cancel()
+        initialPreviewRefreshTimeoutJob = null
+        pendingInitialRefreshSession = null
     }
 
     private fun startPreview(): Boolean {
@@ -2662,6 +2690,7 @@ class CameraController(
             cameraOpenCloseLock.acquire()
 
             stopVideoRecordingInternal()
+            clearInitialPreviewSessionRefresh()
             previewReadyTimeoutJob?.cancel()
             previewReadyTimeoutJob = null
             pendingReadySession = null
