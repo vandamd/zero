@@ -975,10 +975,6 @@ class CameraController(
 
             stopActiveRepeatingRequest()
 
-            if (cameraDevice != null && captureMode == CaptureMode.VIDEO && captureSessionIncludesRecorderSurface) {
-                previewRestarted = startPreview()
-            }
-
             if (recorder != null && wasRecording) {
                 try {
                     recorder.stop()
@@ -990,6 +986,10 @@ class CameraController(
                 savedUri = null
             }
             releasePreparedVideoRecorder(deleteOutput = savedUri == null)
+
+            if (cameraDevice != null && captureMode == CaptureMode.VIDEO && captureSessionIncludesRecorderSurface) {
+                previewRestarted = startPreview()
+            }
 
             savedUri?.let { finalizePendingVideo(it) }
 
