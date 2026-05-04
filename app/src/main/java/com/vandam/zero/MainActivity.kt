@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
 
             KeyEvent.KEYCODE_FOCUS -> {
                 if (event?.repeatCount == 0) {
-                    Log.d("ZeroKeys", "Focus Button Pressed")
+                    Log.d("ZeroKeys", "Focus Button Pressed - Ignored in centre-focus mode")
                     viewModel.onFocusButtonPress()
                 }
                 true
@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
 
             KeyEvent.KEYCODE_VOLUME_UP -> {
                 if (event?.repeatCount == 0) {
-                    Log.d("ZeroKeys", "Volume Up Pressed - Start Metering")
+                    Log.d("ZeroKeys", "Volume Up Pressed - Metering removed in simple mode")
                     viewModel.onMeterButtonPress()
                 }
                 true
@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
             }
 
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                Log.d("ZeroKeys", "Volume Up Released - Stop Metering")
+                Log.d("ZeroKeys", "Volume Up Released - Metering removed in simple mode")
                 viewModel.onMeterButtonRelease()
                 true
             }

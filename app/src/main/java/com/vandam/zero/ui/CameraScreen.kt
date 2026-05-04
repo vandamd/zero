@@ -194,6 +194,7 @@ private data class CameraUiState(
 ) {
     val isBusy: Boolean get() = isCapturing || isSaving
     val isVideoMode: Boolean get() = captureMode == CaptureMode.VIDEO
+    val captureModeText: String get() = if (isVideoMode) "VIDEO" else "PHOTO"
     val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
     val exposureText: String get() = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
     val textColor: androidx.compose.ui.graphics.Color
@@ -293,36 +294,15 @@ private fun LeftToolbar(
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        when (uiState.exposureMode) {
-            CameraViewModel.ExposureMode.AUTO -> {
-                AutoExposureControls(
-                    exposureText = uiState.exposureText,
-                    isActive = uiState.sliderMode == CameraViewModel.SliderMode.EXPOSURE,
-                    activeColor = uiState.textColor,
-                    inactiveColor = uiState.textColorVariant,
-                    onTap = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.toggleExposurePanel()
-                    },
-                    onLongPress = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.resetExposureToDefault()
-                    },
-                )
-            }
-
-            CameraViewModel.ExposureMode.MANUAL -> {
-                ManualExposureControls(
-                    isoValue = uiState.isoValue,
-                    shutterSpeedNs = uiState.shutterSpeedNs,
-                    sliderMode = uiState.sliderMode,
-                    activeColor = uiState.textColor,
-                    inactiveColor = uiState.textColorVariant,
-                    viewModel = viewModel,
-                    haptic = haptic,
-                )
-            }
-        }
+        ToolbarTextButton(
+            text = uiState.captureModeText,
+            color = uiState.textColor,
+            enabled = !uiState.isBusy && !uiState.isRecording,
+            onTap = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleCaptureMode()
+            },
+        )
 
         SettingsButtons(
             uiState = uiState,
@@ -474,16 +454,6 @@ private fun SettingsButtons(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
     ) {
-        ToolbarTextButton(
-            text = if (uiState.exposureMode == CameraViewModel.ExposureMode.AUTO) "A" else "M",
-            color = uiState.textColor,
-            enabled = !uiState.isBusy && !uiState.isRecording,
-            onTap = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.toggleExposureMode()
-            },
-        )
-
         if (uiState.isVideoMode) {
             ToolbarTextButton(
                 text = uiState.videoPresetLabel,

@@ -37,6 +37,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 class CameraController(
     private val context: Context,
@@ -54,6 +55,8 @@ class CameraController(
 
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val JPEG_QUALITY = 95
+        private const val PHOTO_EXPOSURE_COMPENSATION_EV = -0.33f
+        private const val CENTER_REGION_HALF_DIVISOR = 6
 
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
@@ -144,6 +147,7 @@ class CameraController(
 
     private var captureStartTimestamp: Long = 0
     private var shutterTimestamp: Long = 0
+    private var capturedBwMode: Boolean = false
 
     private var pendingCaptureCount = 0
     private val captureLock = Object()
@@ -962,25 +966,8 @@ class CameraController(
         if (captureMode == CaptureMode.VIDEO) {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, getActiveVideoFpsRange())
-
-            if (autoExposure) {
-                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
-            } else {
-                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                builder.set(
-                    CaptureRequest.SENSOR_SENSITIVITY,
-                    manualIso.coerceIn(
-                        isoRange?.lower ?: 100,
-                        isoRange?.upper ?: 1600,
-                    ),
-                )
-                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, getActiveVideoExposureTimeNs())
-                builder.set(CaptureRequest.SENSOR_FRAME_DURATION, videoPreset.frameDurationNs)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, 100)
-                }
-            }
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, getExposureCompensationIndex(0))
 
             builder.set(
                 CaptureRequest.FLASH_MODE,
@@ -1005,31 +992,24 @@ class CameraController(
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
 
-        if (captureMode == CaptureMode.PHOTO && autoExposure) {
+        if (captureMode == CaptureMode.PHOTO) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
-        } else if (captureMode == CaptureMode.PHOTO) {
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-
-            val maxSensorIso = isoRange?.upper ?: 1600
-            val (sensorIso, boost) =
-                if (manualIso <= maxSensorIso) {
-                    manualIso to 100
-                } else {
-                    val requiredBoost = (manualIso * 100) / maxSensorIso
-                    maxSensorIso to requiredBoost.coerceAtMost(3199)
-                }
-
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorIso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualExposureTimeNs)
-            builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, boost)
+            builder.set(
+                CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
+                getExposureCompensationIndexForEv(PHOTO_EXPOSURE_COMPENSATION_EV),
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, 100)
+            }
         }
+        applyFixedCenterRegions(builder)
 
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
         builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF)
         builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_FAST)
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+        builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF)
 
         // Minimize tonemapping: use linear identity curve everywhere
         builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
@@ -1056,6 +1036,50 @@ class CameraController(
         if (captureMode == CaptureMode.PHOTO) {
             builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+        }
+    }
+
+    private fun getExposureCompensationIndex(index: Int): Int =
+        index.coerceIn(
+            exposureCompensationRange?.lower ?: -12,
+            exposureCompensationRange?.upper ?: 12,
+        )
+
+    private fun getExposureCompensationIndexForEv(ev: Float): Int {
+        val step = exposureCompensationStep.takeIf { it > 0f } ?: 1f
+        val index = (ev / step).roundToInt()
+        return getExposureCompensationIndex(index)
+    }
+
+    private fun applyFixedCenterRegions(builder: CaptureRequest.Builder) {
+        val characteristics = cameraCharacteristics ?: return
+        val sensorRect =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                    ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            } else {
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            } ?: return
+
+        val halfSize = minOf(sensorRect.width(), sensorRect.height()) / CENTER_REGION_HALF_DIVISOR
+        val centerX = sensorRect.centerX()
+        val centerY = sensorRect.centerY()
+        val region =
+            MeteringRectangle(
+                android.graphics.Rect(
+                    (centerX - halfSize).coerceAtLeast(sensorRect.left),
+                    (centerY - halfSize).coerceAtLeast(sensorRect.top),
+                    (centerX + halfSize).coerceAtMost(sensorRect.right),
+                    (centerY + halfSize).coerceAtMost(sensorRect.bottom),
+                ),
+                MeteringRectangle.METERING_WEIGHT_MAX,
+            )
+
+        if (!fastMode && maxAfRegions > 0) {
+            builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
+        }
+        if (maxAeRegions > 0) {
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
         }
     }
 
@@ -1464,13 +1488,10 @@ class CameraController(
 
         captureStartTimestamp = System.currentTimeMillis()
         capturedRotation = currentRotation
+        capturedBwMode = bwMode || monoFlavor
 
         if (currentOutputFormat == OUTPUT_FORMAT_JPEG) {
-            if (fastMode && zslEnabled) {
-                takeZslPhoto()
-            } else {
-                takeVanillaJpegPhoto()
-            }
+            takeVanillaJpegPhoto()
             return
         }
 
@@ -1500,6 +1521,7 @@ class CameraController(
             pendingRawImage = null
             pendingThumbnailImage?.close()
             pendingThumbnailImage = null
+            lastCaptureResult = null
         }
 
         try {
@@ -1668,6 +1690,7 @@ class CameraController(
                 val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
                 val actualExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                 val actualAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+                val actualAeCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)
                 val actualAwbMode = result.get(CaptureResult.CONTROL_AWB_MODE)
                 val actualAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
                 val actualTonemap = result.get(CaptureResult.TONEMAP_MODE)
@@ -1678,7 +1701,7 @@ class CameraController(
                 Log.d(
                     TAG,
                     "Capture result: ISO=$actualIso, exposure=${actualExposure}ns, " +
-                        "AE=$actualAeMode, AWB=$actualAwbMode, AF=$actualAfMode",
+                        "AE=$actualAeMode, EC=$actualAeCompensation, AWB=$actualAwbMode, AF=$actualAfMode",
                 )
                 Log.d(
                     TAG,
@@ -2050,8 +2073,10 @@ class CameraController(
             val previewBitmap = extractPreviewFromYuv(previewYuvImage)
             previewYuvImage.close()
 
-            withContext(Dispatchers.Main) {
-                onPreviewReadyCallback?.invoke(previewBitmap)
+            if (previewBitmap != null) {
+                withContext(Dispatchers.Main) {
+                    onPreviewReadyCallback?.invoke(previewBitmap)
+                }
             }
 
             var attempts = 0
@@ -2070,6 +2095,7 @@ class CameraController(
                 return@launch
             }
 
+            val saveStart = System.currentTimeMillis()
             val uri = saveDngToStorage(rawImage, previewBitmap)
             rawImage.close()
 
@@ -2077,7 +2103,11 @@ class CameraController(
             val shutterLatency = shutterTimestamp - captureStartTimestamp
             val saveLatency = saveCompleteTime - shutterTimestamp
             val totalLatency = saveCompleteTime - captureStartTimestamp
-            Log.e(TAG, "Benchmark [RAW]: shutter=${shutterLatency}ms, save=${saveLatency}ms, total=${totalLatency}ms")
+            Log.e(
+                TAG,
+                "Benchmark [RAW]: shutter=${shutterLatency}ms, process=${saveLatency}ms, " +
+                    "save=${saveCompleteTime - saveStart}ms, total=${totalLatency}ms",
+            )
 
             synchronized(captureLock) {
                 pendingCaptureCount--
@@ -2111,7 +2141,7 @@ class CameraController(
 
         var bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
 
-        if ((bwMode || monoFlavor) && bitmap != null) {
+        if (capturedBwMode && bitmap != null) {
             bitmap = GrayscaleConverter.toGrayscale(bitmap, recycleSource = true)
         }
 
@@ -2327,8 +2357,9 @@ class CameraController(
     }
 
     fun setBwMode(enabled: Boolean) {
-        if (bwMode == enabled) return
-        bwMode = enabled
+        val nextEnabled = enabled && captureMode == CaptureMode.PHOTO
+        if (bwMode == nextEnabled) return
+        bwMode = nextEnabled
         Log.e(TAG, "BW mode set to: $enabled")
         applyGrayscaleFilterToPreview()
     }
@@ -2370,58 +2401,34 @@ class CameraController(
         enabled: Boolean,
         ev: Float? = null,
     ) {
-        autoExposure = enabled
-        if (ev != null) {
-            val step = exposureCompensationStep
-            exposureCompensation =
-                (ev / step).toInt().coerceIn(
-                    exposureCompensationRange?.lower ?: -12,
-                    exposureCompensationRange?.upper ?: 12,
-                )
-        }
-        Log.e(TAG, "Auto exposure: $enabled, EC index: $exposureCompensation")
+        autoExposure = true
+        exposureCompensation =
+            if (captureMode == CaptureMode.PHOTO) {
+                getExposureCompensationIndexForEv(PHOTO_EXPOSURE_COMPENSATION_EV)
+            } else {
+                getExposureCompensationIndex(0)
+            }
+        Log.e(TAG, "Auto exposure: $enabled, EC index: $exposureCompensation, step: $exposureCompensationStep")
         updatePreview()
     }
 
     fun setExposureCompensation(ev: Float) {
-        val step = exposureCompensationStep
         exposureCompensation =
-            (ev / step).toInt().coerceIn(
-                exposureCompensationRange?.lower ?: -12,
-                exposureCompensationRange?.upper ?: 12,
-            )
-        Log.e(TAG, "Exposure compensation: $ev EV (index: $exposureCompensation)")
-        if (autoExposure) {
-            updatePreview()
-        }
+            if (captureMode == CaptureMode.PHOTO) {
+                getExposureCompensationIndexForEv(PHOTO_EXPOSURE_COMPENSATION_EV)
+            } else {
+                getExposureCompensationIndex(0)
+            }
+        Log.e(TAG, "Exposure compensation UI removed; using EC index: $exposureCompensation, step: $exposureCompensationStep")
+        updatePreview()
     }
 
     fun setManualExposure(
         iso: Int,
         exposureTimeNs: Long,
     ) {
-        autoExposure = false
-        if (captureMode == CaptureMode.VIDEO) {
-            manualIso =
-                iso.coerceIn(
-                    isoRange?.lower ?: 100,
-                    isoRange?.upper ?: 1600,
-                )
-            manualExposureTimeNs = getClampedVideoExposure(exposureTimeNs)
-        } else {
-            val maxEffectiveIso = (isoRange?.upper ?: 1600) * 32
-            manualIso =
-                iso.coerceIn(
-                    isoRange?.lower ?: 100,
-                    maxEffectiveIso,
-                )
-            manualExposureTimeNs =
-                exposureTimeNs.coerceIn(
-                    exposureTimeRange?.lower ?: 1000000L,
-                    exposureTimeRange?.upper ?: 1000000000L,
-                )
-        }
-        Log.e(TAG, "Manual exposure: ISO=$manualIso, shutter=${manualExposureTimeNs}ns")
+        autoExposure = true
+        Log.e(TAG, "Manual exposure removed; keeping auto exposure")
         updatePreview()
     }
 
