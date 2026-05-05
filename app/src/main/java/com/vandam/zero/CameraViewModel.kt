@@ -89,12 +89,6 @@ class CameraViewModel : ViewModel() {
     private val _outputFormat = MutableStateFlow(CameraController.OUTPUT_FORMAT_JPEG)
     val outputFormat: StateFlow<Int> = _outputFormat
 
-    private val _bwMode = MutableStateFlow(false)
-    val bwMode: StateFlow<Boolean> = _bwMode
-
-    private val _colorMode = MutableStateFlow(false)
-    val colorMode: StateFlow<Boolean> = _colorMode
-
     private val _availableFormats = MutableStateFlow<List<Int>>(emptyList())
     val availableFormats: StateFlow<List<Int>> = _availableFormats
 
@@ -136,9 +130,6 @@ class CameraViewModel : ViewModel() {
 
     private val _capturedImageBitmap = MutableStateFlow<Bitmap?>(null)
     val capturedImageBitmap: StateFlow<Bitmap?> = _capturedImageBitmap
-
-    private val _capturedImageIsPortrait = MutableStateFlow(false)
-    val capturedImageIsPortrait: StateFlow<Boolean> = _capturedImageIsPortrait
 
     private val _lastBenchmark = MutableStateFlow<Pair<Long, Long>?>(null)
     val lastBenchmark: StateFlow<Pair<Long, Long>?> = _lastBenchmark
@@ -280,10 +271,8 @@ class CameraViewModel : ViewModel() {
         if (isVideoMode()) {
             controller.setVideoPreset(_videoPreset.value)
             controller.setVideoTorchEnabled(false)
-            controller.setBwMode(false)
         } else {
             controller.setFlashEnabled(false)
-            controller.setBwMode(_bwMode.value)
             controller.setFastMode(false)
             controller.setOutputFormat(_outputFormat.value)
         }
@@ -322,7 +311,6 @@ class CameraViewModel : ViewModel() {
     fun clearCapturedImageUri() {
         _capturedImageUri.value = null
         _capturedImageBitmap.value = null
-        _capturedImageIsPortrait.value = false
     }
 
     private fun extractDngThumbnail(uri: Uri): Bitmap? {
@@ -401,7 +389,6 @@ class CameraViewModel : ViewModel() {
                 CaptureMode.VIDEO
             }
         restoreModeSettings(_captureMode.value)
-        _bwMode.value = !isVideoMode() && _colorMode.value
         _flashEnabled.value = false
         updateRangesForCurrentMode()
         closeAllPanels()
@@ -618,8 +605,6 @@ class CameraViewModel : ViewModel() {
             _videoPreset.value =
                 runCatching { VideoPreset.valueOf(savedVideoPresetName) }.getOrDefault(VideoPreset.FHD30)
             _outputFormat.value = p.getInt("output_format", CameraController.OUTPUT_FORMAT_JPEG)
-            _bwMode.value = p.getBoolean("bw_mode", false)
-            _colorMode.value = p.getBoolean("color_mode_bw", false)
             _isFastMode.value = false
             _redTextMode.value = p.getBoolean("red_text_mode", false)
             _oisEnabled.value = p.getBoolean("ois_enabled", true)
@@ -653,8 +638,6 @@ class CameraViewModel : ViewModel() {
             putLong("video_shutter_speed_ns", videoShutterSpeedState)
             putString("video_preset", _videoPreset.value.name)
             putInt("output_format", _outputFormat.value)
-            putBoolean("bw_mode", _bwMode.value)
-            putBoolean("color_mode_bw", _colorMode.value)
             putBoolean("fast_mode", _isFastMode.value)
             putBoolean("red_text_mode", _redTextMode.value)
             putBoolean("ois_enabled", _oisEnabled.value)
@@ -687,14 +670,12 @@ class CameraViewModel : ViewModel() {
         if (!isVideoMode() && _isFastMode.value) {
             _isFastMode.value = false
         }
-        _bwMode.value = !isVideoMode() && _colorMode.value
 
         cameraController?.setInitialOutputFormat(_outputFormat.value)
         cameraController?.setCaptureMode(_captureMode.value)
         cameraController?.setFlashEnabled(false)
         cameraController?.setVideoPreset(_videoPreset.value)
         cameraController?.setVideoTorchEnabled(false)
-        cameraController?.setBwMode(_bwMode.value)
         cameraController?.setFastMode(false)
         cameraController?.setOisEnabled(_oisEnabled.value)
 
@@ -799,11 +780,9 @@ class CameraViewModel : ViewModel() {
         val newOption = formats[nextIndex]
 
         _isFastMode.value = false
-        _bwMode.value = _colorMode.value
         _outputFormat.value = newOption
         updatePhotoIsoRangeForFormat()
         cameraController?.setFastMode(false)
-        cameraController?.setBwMode(_bwMode.value)
         cameraController?.setOutputFormat(newOption)
         saveSettings()
     }
@@ -812,16 +791,6 @@ class CameraViewModel : ViewModel() {
         if (isVideoMode()) return
         _outputFormat.value = format
         cameraController?.setOutputFormat(format)
-        saveSettings()
-    }
-
-    fun toggleColorMode() {
-        if (isVideoMode()) return
-        if (_isCapturing.value || _isSaving.value) return
-
-        _colorMode.value = !_colorMode.value
-        _bwMode.value = _colorMode.value
-        cameraController?.setBwMode(_bwMode.value)
         saveSettings()
     }
 
@@ -893,7 +862,6 @@ class CameraViewModel : ViewModel() {
                 },
                 onPreviewReady = { bitmap ->
                     if (bitmap != null && _previewEnabled.value) {
-                        _capturedImageIsPortrait.value = bitmap.height > bitmap.width
                         _capturedImageBitmap.value = bitmap
                     }
                 },
@@ -902,7 +870,6 @@ class CameraViewModel : ViewModel() {
                         if (uri != null && _previewEnabled.value && _capturedImageBitmap.value == null) {
                             val thumbnail = extractDngThumbnail(uri)
                             if (thumbnail != null) {
-                                _capturedImageIsPortrait.value = thumbnail.height > thumbnail.width
                                 _capturedImageBitmap.value = thumbnail
                             }
                         }

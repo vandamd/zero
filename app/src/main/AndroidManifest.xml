@@ -22,7 +22,7 @@
         <activity
             android:name="com.vandam.zero.MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait"
+            android:screenOrientation="landscape"
             android:theme="@style/Theme.Zero.SplashScreen">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

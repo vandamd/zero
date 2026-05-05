@@ -66,7 +66,6 @@ import com.vandam.zero.ui.components.IsoSlider
 import com.vandam.zero.ui.components.MeterCrosshair
 import com.vandam.zero.ui.components.ShutterSpeedSlider
 import com.vandam.zero.ui.components.formatShutterSpeed
-import com.vandam.zero.ui.components.rotateVertically
 import com.vandam.zero.ui.theme.CameraColors
 import com.vandam.zero.ui.theme.CameraDimens
 import com.vandam.zero.ui.theme.CameraTiming
@@ -137,21 +136,30 @@ private fun CameraContent(viewModel: CameraViewModel) {
     val uiState = rememberCameraUiState(viewModel)
 
     CompositionLocalProvider(LocalDensity provides fixedDensity) {
-        Row(modifier = Modifier.fillMaxSize()) {
-            if (!uiState.uiHidden) {
-                LeftToolbar(
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                CameraPreviewArea(
                     uiState = uiState,
                     viewModel = viewModel,
                     haptic = haptic,
+                    modifier = Modifier.weight(1f),
                 )
+
+                if (!uiState.uiHidden) {
+                    BottomToolbar(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        haptic = haptic,
+                    )
+                }
             }
 
-            CameraPreviewArea(
-                uiState = uiState,
-                viewModel = viewModel,
-                haptic = haptic,
-                modifier = Modifier.weight(1f),
-            )
+            if (!uiState.isVideoMode && uiState.previewEnabled && !uiState.uiHidden) {
+                CapturedImagePreview(
+                    bitmap = uiState.capturedImageBitmap,
+                    onPreviewTimeout = { viewModel.clearCapturedImageUri() },
+                )
+            }
         }
     }
 }
@@ -178,23 +186,21 @@ private data class CameraUiState(
     val flashEnabled: Boolean,
     val previewEnabled: Boolean,
     val toastMessage: String?,
-    val colorMode: Boolean,
     val isCapturing: Boolean,
     val isSaving: Boolean,
     val isRecording: Boolean,
     val recordingElapsedMs: Long,
     val capturedImageBitmap: android.graphics.Bitmap?,
-    val capturedImageIsPortrait: Boolean,
     val isFastMode: Boolean,
     val cameraHidden: Boolean,
     val viewfinderReady: Boolean,
     val uiHidden: Boolean,
     val redTextMode: Boolean,
+    val oisEnabled: Boolean,
     val isMetering: Boolean,
 ) {
     val isBusy: Boolean get() = isCapturing || isSaving
     val isVideoMode: Boolean get() = captureMode == CaptureMode.VIDEO
-    val captureModeText: String get() = if (isVideoMode) "VIDEO" else "PHOTO"
     val isRawMode: Boolean get() = outputFormat == CameraController.OUTPUT_FORMAT_RAW
     val exposureText: String get() = if (exposureValue == 0f) "0.0" else "%+.1f".format(exposureValue)
     val textColor: androidx.compose.ui.graphics.Color
@@ -226,18 +232,17 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
     val flashEnabled by viewModel.flashEnabled.collectAsState()
     val previewEnabled by viewModel.previewEnabled.collectAsState()
     val toastMessage by viewModel.toastMessage.collectAsState()
-    val colorMode by viewModel.colorMode.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val isRecording by viewModel.isRecording.collectAsState()
     val recordingElapsedMs by viewModel.recordingElapsedMs.collectAsState()
     val capturedImageBitmap by viewModel.capturedImageBitmap.collectAsState()
-    val capturedImageIsPortrait by viewModel.capturedImageIsPortrait.collectAsState()
     val isFastMode by viewModel.isFastMode.collectAsState()
     val cameraHidden by viewModel.cameraHidden.collectAsState()
     val viewfinderReady by viewModel.viewfinderReady.collectAsState()
     val uiHidden by viewModel.uiHidden.collectAsState()
     val redTextMode by viewModel.redTextMode.collectAsState()
+    val oisEnabled by viewModel.oisEnabled.collectAsState()
     val isMetering by viewModel.isMetering.collectAsState()
 
     return CameraUiState(
@@ -259,51 +264,40 @@ private fun rememberCameraUiState(viewModel: CameraViewModel): CameraUiState {
         flashEnabled = flashEnabled,
         previewEnabled = previewEnabled,
         toastMessage = toastMessage,
-        colorMode = colorMode,
         isCapturing = isCapturing,
         isSaving = isSaving,
         isRecording = isRecording,
         recordingElapsedMs = recordingElapsedMs,
         capturedImageBitmap = capturedImageBitmap,
-        capturedImageIsPortrait = capturedImageIsPortrait,
         isFastMode = isFastMode,
         cameraHidden = cameraHidden,
         viewfinderReady = viewfinderReady,
         uiHidden = uiHidden,
         redTextMode = redTextMode,
+        oisEnabled = oisEnabled,
         isMetering = isMetering,
     )
 }
 
 /**
- * Left toolbar containing exposure controls and settings buttons.
+ * Bottom toolbar containing exposure controls and settings buttons.
  */
 @Composable
-private fun LeftToolbar(
+private fun BottomToolbar(
     uiState: CameraUiState,
     viewModel: CameraViewModel,
     haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
 ) {
-    Column(
+    Row(
         modifier =
             Modifier
                 .background(CameraColors.background)
-                .width(CameraDimens.toolbarWidth)
-                .fillMaxHeight()
-                .padding(vertical = CameraDimens.toolbarVerticalPadding),
-        verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally,
+                .fillMaxWidth()
+                .height(CameraDimens.toolbarWidth)
+                .padding(horizontal = CameraDimens.toolbarVerticalPadding),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ToolbarTextButton(
-            text = uiState.captureModeText,
-            color = uiState.textColor,
-            enabled = !uiState.isBusy && !uiState.isRecording,
-            onTap = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.toggleCaptureMode()
-            },
-        )
-
         SettingsButtons(
             uiState = uiState,
             viewModel = viewModel,
@@ -348,16 +342,11 @@ private fun AutoExposureControls(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        Box(
-            modifier = Modifier.rotateVertically(clockwise = true),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = exposureText,
-                style = CameraTypography.toolbarText,
-                color = textColor,
-            )
-        }
+        Text(
+            text = exposureText,
+            style = CameraTypography.toolbarText,
+            color = textColor,
+        )
     }
 }
 
@@ -374,15 +363,14 @@ private fun ManualExposureControls(
     viewModel: CameraViewModel,
     haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
     ) {
         Box(
             modifier =
                 Modifier
-                    .rotateVertically(clockwise = true)
-                    .padding(start = 8.dp)
+                    .padding(top = 8.dp)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = {
@@ -412,7 +400,6 @@ private fun ManualExposureControls(
         Box(
             modifier =
                 Modifier
-                    .rotateVertically(clockwise = true)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = {
@@ -442,7 +429,7 @@ private fun ManualExposureControls(
 }
 
 /**
- * Settings buttons (exposure mode, color mode, format, flash, grid).
+ * Settings buttons (exposure mode, OIS, format, flash, grid).
  */
 @Composable
 private fun SettingsButtons(
@@ -450,9 +437,9 @@ private fun SettingsButtons(
     viewModel: CameraViewModel,
     haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CameraDimens.toolbarItemSpacing),
     ) {
         if (uiState.isVideoMode) {
             ToolbarTextButton(
@@ -467,26 +454,14 @@ private fun SettingsButtons(
             )
         } else {
             ToolbarTextButton(
-                text =
-                    if (uiState.isRawMode) {
-                        "RGB"
-                    } else if (uiState.colorMode) {
-                        "BW"
-                    } else {
-                        "RGB"
-                    },
+                text = "OIS",
                 color = uiState.textColor,
                 enabled = !uiState.isBusy,
-                alpha = if (uiState.isRawMode) 0.3f else 1f,
+                alpha = if (uiState.oisEnabled) 1f else 0.3f,
                 onTap = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.toggleColorMode()
-                },
-                onLongPress = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     viewModel.toggleOis()
                 },
-                tapEnabled = !uiState.isRawMode,
             )
 
             if (!BuildConfig.MONOCHROME_MODE) {
@@ -569,7 +544,6 @@ private fun ToolbarTextButton(
     Box(
         modifier =
             Modifier
-                .rotateVertically(clockwise = true)
                 .pointerInput(canTap) {
                     detectTapGestures(
                         onTap = { if (canTap) onTap() },
@@ -601,7 +575,6 @@ private fun ToolbarIconButton(
     Box(
         modifier =
             Modifier
-                .rotateVertically(clockwise = true)
                 .pointerInput(tapEnabled) {
                     detectTapGestures(
                         onTap = { if (tapEnabled) onTap() },
@@ -674,11 +647,12 @@ private fun CameraPreviewArea(
 
         Box(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.CenterEnd,
+            contentAlignment = Alignment.TopCenter,
         ) {
             StatusPanel(
                 uiState = uiState,
                 viewModel = viewModel,
+                isTopEdge = true,
                 showStatusText = !uiState.uiHidden,
             )
         }
@@ -688,14 +662,6 @@ private fun CameraPreviewArea(
             haptic = haptic,
             onFlashComplete = { viewModel.resetShutterFlash() },
         )
-
-        if (!uiState.isVideoMode && uiState.previewEnabled && !uiState.uiHidden) {
-            CapturedImagePreview(
-                bitmap = uiState.capturedImageBitmap,
-                isPortrait = uiState.capturedImageIsPortrait,
-                onPreviewTimeout = { viewModel.clearCapturedImageUri() },
-            )
-        }
 
         if (!uiState.uiHidden) {
             CrosshairAutoHide(
@@ -860,6 +826,7 @@ private fun StatusPanel(
     uiState: CameraUiState,
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier,
+    isTopEdge: Boolean = false,
     showStatusText: Boolean = true,
 ) {
     val readyStatusText = if (uiState.viewfinderReady) "READY" else "LOADING"
@@ -879,55 +846,100 @@ private fun StatusPanel(
             }
         }
 
-    Column(
-        modifier =
+    val panelModifier =
+        if (isTopEdge) {
+            modifier
+                .fillMaxWidth()
+                .height(CameraDimens.statusPanelWidth)
+                .padding(horizontal = CameraDimens.statusPanelVerticalPadding)
+        } else {
             modifier
                 .fillMaxHeight()
                 .width(CameraDimens.statusPanelWidth)
-                .padding(vertical = CameraDimens.statusPanelVerticalPadding),
-        verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box {
-            if (uiState.isVideoMode) {
-                uiState.toastMessage?.let { message ->
-                    Text(
-                        text = message,
-                        color = uiState.textColor,
-                        style = CameraTypography.toolbarText,
-                        modifier = Modifier.rotateVertically(clockwise = true),
-                    )
+                .padding(vertical = CameraDimens.statusPanelVerticalPadding)
+        }
 
-                    LaunchedEffect(message) {
-                        delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
-                        viewModel.clearToastMessage()
-                    }
+    val contentArrangement = Arrangement.SpaceBetween
+    val contentAlignment = Alignment.CenterVertically
+
+    if (isTopEdge) {
+        Row(
+            modifier = panelModifier,
+            horizontalArrangement = contentArrangement,
+            verticalAlignment = contentAlignment,
+        ) {
+            StatusPanelContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                statusText = statusText,
+                showStatusText = showStatusText,
+            )
+        }
+    } else {
+        Column(
+            modifier = panelModifier,
+            verticalArrangement = contentArrangement,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            StatusPanelContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                statusText = statusText,
+                showStatusText = showStatusText,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusPanelContent(
+    uiState: CameraUiState,
+    viewModel: CameraViewModel,
+    statusText: String,
+    showStatusText: Boolean,
+) {
+    Box {
+        if (uiState.isVideoMode) {
+            uiState.toastMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = uiState.textColor,
+                    style = CameraTypography.toolbarText,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+
+                LaunchedEffect(message) {
+                    delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
+                    viewModel.clearToastMessage()
                 }
-            } else {
-                uiState.toastMessage?.let { message ->
-                    Text(
-                        text = message,
-                        color = uiState.textColor,
-                        style = CameraTypography.toolbarText,
-                        modifier = Modifier.rotateVertically(clockwise = true),
-                    )
+            }
+        } else {
+            uiState.toastMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = uiState.textColor,
+                    style = CameraTypography.toolbarText,
+                    maxLines = 1,
+                    softWrap = false,
+                )
 
-                    LaunchedEffect(message) {
-                        delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
-                        viewModel.clearToastMessage()
-                    }
+                LaunchedEffect(message) {
+                    delay(CameraTiming.TOAST_DISPLAY_DURATION_MS)
+                    viewModel.clearToastMessage()
                 }
             }
         }
+    }
 
-        if (showStatusText) {
-            Text(
-                text = statusText,
-                color = uiState.textColor,
-                style = CameraTypography.toolbarText,
-                modifier = Modifier.rotateVertically(clockwise = true),
-            )
-        }
+    if (showStatusText) {
+        Text(
+            text = statusText,
+            color = uiState.textColor,
+            style = CameraTypography.toolbarText,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
@@ -962,7 +974,6 @@ private fun ShutterFlashEffect(
 @Composable
 private fun CapturedImagePreview(
     bitmap: android.graphics.Bitmap?,
-    isPortrait: Boolean,
     onPreviewTimeout: () -> Unit,
 ) {
     bitmap?.let {
@@ -970,16 +981,16 @@ private fun CapturedImagePreview(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(bottom = CameraDimens.previewBottomPadding),
-            contentAlignment = Alignment.BottomStart,
+                    .padding(
+                        end = CameraDimens.previewBottomPadding,
+                        bottom = CameraDimens.toolbarWidth,
+                    ),
+            contentAlignment = Alignment.BottomEnd,
         ) {
             Image(
                 bitmap = it.asImageBitmap(),
                 contentDescription = "Captured photo",
-                modifier =
-                    Modifier
-                        .size(CameraDimens.previewThumbnailSize)
-                        .then(if (!isPortrait) Modifier.rotate(90f) else Modifier),
+                modifier = Modifier.size(CameraDimens.previewThumbnailSize),
                 contentScale = ContentScale.Fit,
             )
         }

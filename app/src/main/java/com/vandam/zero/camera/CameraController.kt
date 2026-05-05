@@ -55,8 +55,8 @@ class CameraController(
 
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val JPEG_QUALITY = 95
-        private const val PHOTO_EXPOSURE_COMPENSATION_EV = -0.33f
-        private const val CENTER_REGION_HALF_DIVISOR = 6
+        private const val PHOTO_EXPOSURE_COMPENSATION_EV = 0f
+        private const val CENTER_FOCUS_REGION_HALF_DIVISOR = 6
 
         const val OUTPUT_FORMAT_JPEG = 0
         const val OUTPUT_FORMAT_RAW = 2
@@ -110,7 +110,6 @@ class CameraController(
     private var currentOutputFormat: Int = OUTPUT_FORMAT_JPEG
     private var flashEnabled: Boolean = false
     private var videoTorchEnabled: Boolean = false
-    private var bwMode: Boolean = false
     private var fastMode: Boolean = false
     private var monoFlavor: Boolean = BuildConfig.MONOCHROME_MODE
     private var oisEnabled: Boolean = true
@@ -1002,7 +1001,7 @@ class CameraController(
                 builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, 100)
             }
         }
-        applyFixedCenterRegions(builder)
+        applyFixedCenterFocusRegion(builder)
 
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
@@ -1051,7 +1050,7 @@ class CameraController(
         return getExposureCompensationIndex(index)
     }
 
-    private fun applyFixedCenterRegions(builder: CaptureRequest.Builder) {
+    private fun applyFixedCenterFocusRegion(builder: CaptureRequest.Builder) {
         val characteristics = cameraCharacteristics ?: return
         val sensorRect =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1061,7 +1060,7 @@ class CameraController(
                 characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             } ?: return
 
-        val halfSize = minOf(sensorRect.width(), sensorRect.height()) / CENTER_REGION_HALF_DIVISOR
+        val halfSize = minOf(sensorRect.width(), sensorRect.height()) / CENTER_FOCUS_REGION_HALF_DIVISOR
         val centerX = sensorRect.centerX()
         val centerY = sensorRect.centerY()
         val region =
@@ -1077,9 +1076,6 @@ class CameraController(
 
         if (!fastMode && maxAfRegions > 0) {
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
-        }
-        if (maxAeRegions > 0) {
-            builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
         }
     }
 
@@ -1488,7 +1484,7 @@ class CameraController(
 
         captureStartTimestamp = System.currentTimeMillis()
         capturedRotation = currentRotation
-        capturedBwMode = bwMode || monoFlavor
+        capturedBwMode = monoFlavor
 
         if (currentOutputFormat == OUTPUT_FORMAT_JPEG) {
             takeVanillaJpegPhoto()
@@ -1539,13 +1535,10 @@ class CameraController(
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
 
-                    // Copy focus regions from preview if set (for tap-to-focus consistency)
+                    // Copy focus regions from preview if set (for consistency)
                     previewRequestBuilder?.let { preview ->
                         preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { regions ->
                             set(CaptureRequest.CONTROL_AF_REGIONS, regions)
-                        }
-                        preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { regions ->
-                            set(CaptureRequest.CONTROL_AE_REGIONS, regions)
                         }
                     }
                 }
@@ -1640,13 +1633,10 @@ class CameraController(
                         set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
                     }
 
-                    // Copy focus regions from preview if set (for tap-to-focus consistency)
+                    // Copy focus regions from preview if set (for consistency)
                     previewRequestBuilder?.let { preview ->
                         preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { regions ->
                             set(CaptureRequest.CONTROL_AF_REGIONS, regions)
-                        }
-                        preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { regions ->
-                            set(CaptureRequest.CONTROL_AE_REGIONS, regions)
                         }
                     }
                 }
@@ -1779,7 +1769,7 @@ class CameraController(
 
         coroutineScope.launch(Dispatchers.IO) {
             val conversionStart = System.currentTimeMillis()
-            val bytes = yuvToJpeg(image, grayscale = bwMode || monoFlavor)
+            val bytes = yuvToJpeg(image, grayscale = monoFlavor)
             val conversionTime = System.currentTimeMillis() - conversionStart
             image.close()
 
@@ -1822,7 +1812,7 @@ class CameraController(
     private fun handleVanillaYuvCapture(image: Image) {
         coroutineScope.launch(Dispatchers.IO) {
             val conversionStart = System.currentTimeMillis()
-            val bytes = yuvToJpeg(image, grayscale = bwMode || monoFlavor)
+            val bytes = yuvToJpeg(image, grayscale = monoFlavor)
             val conversionTime = System.currentTimeMillis() - conversionStart
             image.close()
 
@@ -1850,7 +1840,7 @@ class CameraController(
             val shutterLatency = shutterTimestamp - captureStartTimestamp
             val processLatency = saveCompleteTime - shutterTimestamp
             val totalLatency = saveCompleteTime - captureStartTimestamp
-            val modeName = if (bwMode || monoFlavor) "BW" else "JPG"
+            val modeName = if (monoFlavor) "BW" else "JPG"
             Log.d(
                 TAG,
                 "Benchmark [$modeName]: shutter=${shutterLatency}ms, convert=${conversionTime}ms, save=${saveTime}ms, total=${totalLatency}ms",
@@ -2165,7 +2155,7 @@ class CameraController(
 
         val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions) ?: return null
 
-        return if (bwMode || monoFlavor) {
+        return if (monoFlavor) {
             GrayscaleConverter.toGrayscale(bitmap, recycleSource = true)
         } else {
             bitmap
@@ -2356,14 +2346,6 @@ class CameraController(
         }
     }
 
-    fun setBwMode(enabled: Boolean) {
-        val nextEnabled = enabled && captureMode == CaptureMode.PHOTO
-        if (bwMode == nextEnabled) return
-        bwMode = nextEnabled
-        Log.e(TAG, "BW mode set to: $enabled")
-        applyGrayscaleFilterToPreview()
-    }
-
     fun setFastMode(enabled: Boolean) {
         if (captureMode == CaptureMode.VIDEO) return
         if (fastMode == enabled) return
@@ -2509,9 +2491,6 @@ class CameraController(
         try {
             applyCommonSettings(builder)
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(focusRegion))
-            if (maxAeRegions > 0) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(focusRegion))
-            }
             if (captureMode == CaptureMode.VIDEO) {
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
                 session.setRepeatingRequest(builder.build(), null, backgroundHandler)
@@ -2564,64 +2543,7 @@ class CameraController(
         enable: Boolean,
         tempEv: Float? = null,
     ) {
-        if (captureMode == CaptureMode.VIDEO) {
-            return
-        }
-
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        val characteristics = cameraCharacteristics ?: return
-
-        val maxAeRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
-        if (maxAeRegions == 0) {
-            Log.e(TAG, "Device doesn't support AE regions")
-            return
-        }
-
-        try {
-            if (enable) {
-                val sensorRect =
-                    characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        ?: return
-
-                val spotSize = minOf(sensorRect.width(), sensorRect.height()) / 40
-                val centerX = sensorRect.width() / 2
-                val centerY = sensorRect.height() / 2
-
-                val left = centerX - spotSize
-                val top = centerY - spotSize
-                val right = centerX + spotSize
-                val bottom = centerY + spotSize
-
-                val meteringRegion =
-                    MeteringRectangle(
-                        android.graphics.Rect(left, top, right, bottom),
-                        MeteringRectangle.METERING_WEIGHT_MAX,
-                    )
-
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRegion))
-                Log.e(TAG, "Center spot metering enabled (${spotSize * 2}px region)")
-            } else {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
-                Log.e(TAG, "Center spot metering disabled")
-            }
-
-            if (tempEv != null && autoExposure) {
-                val step = exposureCompensationStep
-                val tempEc =
-                    (tempEv / step).toInt().coerceIn(
-                        exposureCompensationRange?.lower ?: -12,
-                        exposureCompensationRange?.upper ?: 12,
-                    )
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, tempEc)
-                Log.e(TAG, "Temporary EV set to $tempEv (index: $tempEc)")
-            }
-
-            session.capture(builder.build(), null, backgroundHandler)
-            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Error setting center spot metering", e)
-        }
+        Log.e(TAG, "Center spot metering removed; using camera default AE metering")
     }
 
     // ===================
@@ -2630,7 +2552,7 @@ class CameraController(
 
     private fun applyGrayscaleFilterToPreview() {
         val tv = textureView ?: return
-        val shouldApply = monoFlavor || (captureMode == CaptureMode.PHOTO && bwMode)
+        val shouldApply = monoFlavor
 
         tv.post {
             if (!shouldApply) {
