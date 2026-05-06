@@ -90,7 +90,6 @@ object CameraDimens {
  */
 object CameraTiming {
     const val TOAST_DISPLAY_DURATION_MS = 2000L
-    const val CROSSHAIR_HIDE_DELAY_MS = 2000L
     const val SHUTTER_FLASH_DURATION_MS = 50L
     const val PREVIEW_DISPLAY_DURATION_MS = 800L
 }

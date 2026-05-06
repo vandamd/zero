@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
 
             KeyEvent.KEYCODE_FOCUS -> {
                 if (event?.repeatCount == 0) {
-                    Log.d("ZeroKeys", "Focus Button Pressed - Ignored in centre-focus mode")
+                    Log.d("ZeroKeys", "Focus Button Pressed - Show centre focus")
                     viewModel.onFocusButtonPress()
                 }
                 true

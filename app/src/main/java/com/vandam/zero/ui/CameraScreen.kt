@@ -617,7 +617,14 @@ private fun CameraPreviewArea(
         )
 
         if (!uiState.showFlash && !uiState.cameraHidden && !uiState.uiHidden) {
-            CrosshairOverlay(crosshairPosition = uiState.crosshairPosition)
+            CrosshairOverlay(
+                crosshairPosition =
+                    if (uiState.isFocusButtonHeld) {
+                        uiState.crosshairPosition
+                    } else {
+                        null
+                    },
+            )
 
             if (uiState.isMetering) {
                 Box(
@@ -662,14 +669,6 @@ private fun CameraPreviewArea(
             haptic = haptic,
             onFlashComplete = { viewModel.resetShutterFlash() },
         )
-
-        if (!uiState.uiHidden) {
-            CrosshairAutoHide(
-                crosshairPosition = uiState.crosshairPosition,
-                isFocusButtonHeld = uiState.isFocusButtonHeld,
-                onHide = { viewModel.hideCrosshair() },
-            )
-        }
     }
 }
 
@@ -719,17 +718,6 @@ private fun CameraTextureView(
                         } else {
                             1f
                         }
-                }.pointerInput(uiState.cameraHidden, uiState.uiHidden, uiState.viewfinderReady) {
-                    if (!uiState.cameraHidden && !uiState.uiHidden && uiState.viewfinderReady) {
-                        detectTapGestures { offset ->
-                            viewModel.onTapToFocus(
-                                offset.x,
-                                offset.y,
-                                size.width.toFloat(),
-                                size.height.toFloat(),
-                            )
-                        }
-                    }
                 },
         update = { textureView ->
             viewModel.bindCamera(textureView)
@@ -998,23 +986,6 @@ private fun CapturedImagePreview(
         LaunchedEffect(bitmap) {
             delay(CameraTiming.PREVIEW_DISPLAY_DURATION_MS)
             onPreviewTimeout()
-        }
-    }
-}
-
-/**
- * Auto-hide crosshair after timeout.
- */
-@Composable
-private fun CrosshairAutoHide(
-    crosshairPosition: Pair<Float, Float>?,
-    isFocusButtonHeld: Boolean,
-    onHide: () -> Unit,
-) {
-    LaunchedEffect(crosshairPosition, isFocusButtonHeld) {
-        if (crosshairPosition != null && !isFocusButtonHeld) {
-            delay(CameraTiming.CROSSHAIR_HIDE_DELAY_MS)
-            onHide()
         }
     }
 }

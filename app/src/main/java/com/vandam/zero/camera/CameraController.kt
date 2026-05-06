@@ -2420,96 +2420,6 @@ class CameraController(
         return exposureTimeNs.coerceIn(minExposure, maxExposure)
     }
 
-    /**
-     * Tap to focus at normalized coordinates.
-     */
-    fun onTapToFocus(
-        x: Float,
-        y: Float,
-        width: Float,
-        height: Float,
-    ) {
-        if (fastMode) {
-            Log.e(TAG, "Tap to focus ignored in hyperfocal mode")
-            return
-        }
-
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-
-        if (maxAfRegions <= 0) {
-            Log.e(TAG, "AF regions not supported")
-            if (captureMode == CaptureMode.PHOTO) {
-                triggerAutofocus()
-            }
-            return
-        }
-
-        val chars = cameraCharacteristics ?: return
-        val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-
-        val focusSize = minOf(sensorRect.width(), sensorRect.height()) / 20
-        val normalizedX = x / width
-        val normalizedY = y / height
-
-        val sensorX: Int
-        val sensorY: Int
-        when (sensorOrientation) {
-            90 -> {
-                sensorX = (normalizedY * sensorRect.width()).toInt()
-                sensorY = ((1 - normalizedX) * sensorRect.height()).toInt()
-            }
-
-            270 -> {
-                sensorX = ((1 - normalizedY) * sensorRect.width()).toInt()
-                sensorY = (normalizedX * sensorRect.height()).toInt()
-            }
-
-            180 -> {
-                sensorX = ((1 - normalizedX) * sensorRect.width()).toInt()
-                sensorY = ((1 - normalizedY) * sensorRect.height()).toInt()
-            }
-
-            else -> {
-                sensorX = (normalizedX * sensorRect.width()).toInt()
-                sensorY = (normalizedY * sensorRect.height()).toInt()
-            }
-        }
-
-        val left = (sensorX - focusSize).coerceIn(0, sensorRect.width() - 1)
-        val top = (sensorY - focusSize).coerceIn(0, sensorRect.height() - 1)
-        val right = (sensorX + focusSize).coerceIn(1, sensorRect.width())
-        val bottom = (sensorY + focusSize).coerceIn(1, sensorRect.height())
-
-        val focusRegion =
-            MeteringRectangle(
-                android.graphics.Rect(left, top, right, bottom),
-                MeteringRectangle.METERING_WEIGHT_MAX,
-            )
-
-        try {
-            applyCommonSettings(builder)
-            builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(focusRegion))
-            if (captureMode == CaptureMode.VIDEO) {
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-            } else {
-                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
-
-                session.capture(builder.build(), null, backgroundHandler)
-
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-            }
-
-            Log.e(TAG, "Tap to focus at ($x, $y) -> sensor ($sensorX, $sensorY)")
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Error setting focus region", e)
-        }
-    }
-
     fun triggerFocus() {
         if (captureMode == CaptureMode.VIDEO) {
             Log.e(TAG, "Trigger focus ignored in video mode")
@@ -2529,6 +2439,7 @@ class CameraController(
 
         try {
             applyCommonSettings(builder)
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
             builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
             session.capture(builder.build(), null, backgroundHandler)
 

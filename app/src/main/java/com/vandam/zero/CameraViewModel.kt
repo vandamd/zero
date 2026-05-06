@@ -34,9 +34,7 @@ class CameraViewModel : ViewModel() {
     private val _crosshairPosition = MutableStateFlow<Pair<Float, Float>?>(null)
     val crosshairPosition: StateFlow<Pair<Float, Float>?> = _crosshairPosition
 
-    private var lastFocusPoint: Pair<Float, Float>? = null
     private var lastFocusTimestamp: Long = 0
-    private val focusMemoryTimeoutMs: Long = 3000
 
     private val _isFocusButtonHeld = MutableStateFlow(false)
     val isFocusButtonHeld: StateFlow<Boolean> = _isFocusButtonHeld
@@ -352,6 +350,11 @@ class CameraViewModel : ViewModel() {
 
     fun hideCrosshair() {
         _crosshairPosition.value = null
+    }
+
+    private fun showCenterCrosshair() {
+        if (screenWidth <= 0f || screenHeight <= 0f) return
+        showCrosshair(screenWidth / 2f, screenHeight / 2f)
     }
 
     fun setScreenDimensions(
@@ -884,21 +887,13 @@ class CameraViewModel : ViewModel() {
     }
 
     fun onFocusButtonPress() {
-        _isFocusButtonHeld.value = false
-        hideCrosshair()
+        _isFocusButtonHeld.value = true
+        showCenterCrosshair()
+        cameraController?.triggerFocus()
     }
 
     fun onFocusButtonRelease() {
         _isFocusButtonHeld.value = false
-        hideCrosshair()
-    }
-
-    fun onTapToFocus(
-        x: Float,
-        y: Float,
-        width: Float,
-        height: Float,
-    ) {
         hideCrosshair()
     }
 
