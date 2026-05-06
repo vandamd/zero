@@ -140,6 +140,7 @@ class CameraController(
     private var maxAeRegions: Int = 0
     private var sensorOrientation: Int = 0
     private var supportsRaw: Boolean = false
+    private var supportsHighQualityTonemap: Boolean = false
 
     private var currentRotation: Int = Surface.ROTATION_0
     private var capturedRotation: Int = Surface.ROTATION_0
@@ -161,12 +162,15 @@ class CameraController(
     private var onFormatsAvailableCallback: ((List<Int>) -> Unit)? = null
     private var onVideoPresetsAvailableCallback: ((List<VideoPreset>) -> Unit)? = null
 
-    private val identityTonemapCurve =
-        TonemapCurve(
-            floatArrayOf(0f, 0f, 1f, 1f),
-            floatArrayOf(0f, 0f, 1f, 1f),
-            floatArrayOf(0f, 0f, 1f, 1f),
+    private val identityTonemapPoints =
+        floatArrayOf(
+            0f,
+            0f,
+            1f,
+            1f,
         )
+    private val identityTonemapCurve =
+        TonemapCurve(identityTonemapPoints, identityTonemapPoints, identityTonemapPoints)
 
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
@@ -302,9 +306,12 @@ class CameraController(
 
         maxAfRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
         maxAeRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+        val tonemapModes = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)
+        supportsHighQualityTonemap = tonemapModes?.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) == true
 
         Log.e(TAG, "Camera capabilities - ISO: $isoRange, Exposure: $exposureTimeRange")
         Log.e(TAG, "AF regions: $maxAfRegions, AE regions: $maxAeRegions, Sensor orientation: $sensorOrientation")
+        Log.e(TAG, "Tonemap modes: ${tonemapModes?.joinToString() ?: "unknown"}, highQuality=$supportsHighQualityTonemap")
 
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
@@ -410,6 +417,13 @@ class CameraController(
                             val image = reader.acquireLatestImage()
                             if (image != null) {
                                 handleVanillaYuvCapture(image)
+                            } else {
+                                Log.e(TAG, "Vanilla JPEG: no image available")
+                                synchronized(captureLock) { pendingCaptureCount-- }
+                                coroutineScope.launch(Dispatchers.Main) {
+                                    onPreviewReadyCallback?.invoke(null)
+                                    onCompleteCallback?.invoke(null)
+                                }
                             }
                         } else {
                             reader.acquireLatestImage()?.close()
@@ -1010,9 +1024,7 @@ class CameraController(
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
         builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF)
 
-        // Minimize tonemapping: use linear identity curve everywhere
-        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
-        builder.set(CaptureRequest.TONEMAP_CURVE, identityTonemapCurve)
+        applyHighQualityTonemap(builder)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
         }
@@ -1035,6 +1047,15 @@ class CameraController(
         if (captureMode == CaptureMode.PHOTO) {
             builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+        }
+    }
+
+    private fun applyHighQualityTonemap(builder: CaptureRequest.Builder) {
+        if (supportsHighQualityTonemap) {
+            builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
+        } else {
+            builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+            builder.set(CaptureRequest.TONEMAP_CURVE, identityTonemapCurve)
         }
     }
 
@@ -1556,17 +1577,15 @@ class CameraController(
     }
 
     private fun takeVanillaJpegPhoto() {
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val yuvSurface = zslImageReader?.surface ?: return
+        if (cameraDevice == null || captureSession == null || zslImageReader?.surface == null) return
 
         // If flash is enabled in auto exposure mode, run precapture sequence first
         if (flashEnabled && autoExposure) {
             runPrecaptureSequence {
-                captureJpegWithCurrentSettings(camera, session, yuvSurface)
+                captureJpegWithCurrentSettings()
             }
         } else {
-            captureJpegWithCurrentSettings(camera, session, yuvSurface)
+            captureJpegWithCurrentSettings()
         }
     }
 
@@ -1612,11 +1631,11 @@ class CameraController(
         }
     }
 
-    private fun captureJpegWithCurrentSettings(
-        camera: CameraDevice,
-        session: CameraCaptureSession,
-        yuvSurface: Surface,
-    ) {
+    private fun captureJpegWithCurrentSettings() {
+        val camera = cameraDevice ?: return
+        val session = captureSession ?: return
+        val yuvSurface = zslImageReader?.surface ?: return
+
         try {
             val captureBuilder =
                 camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
@@ -1706,6 +1725,7 @@ class CameraController(
                 failure: CaptureFailure,
             ) {
                 Log.e(TAG, "Capture failed: ${failure.reason}")
+                pendingVanillaJpegCapture = false
                 synchronized(captureLock) { pendingCaptureCount-- }
                 coroutineScope.launch(Dispatchers.Main) {
                     onPreviewReadyCallback?.invoke(null)
@@ -1812,7 +1832,12 @@ class CameraController(
     private fun handleVanillaYuvCapture(image: Image) {
         coroutineScope.launch(Dispatchers.IO) {
             val conversionStart = System.currentTimeMillis()
-            val bytes = yuvToJpeg(image, grayscale = monoFlavor)
+            val bytes =
+                yuvToJpeg(
+                    image,
+                    grayscale = monoFlavor,
+                    softenHighlights = true,
+                )
             val conversionTime = System.currentTimeMillis() - conversionStart
             image.close()
 
@@ -1843,7 +1868,8 @@ class CameraController(
             val modeName = if (monoFlavor) "BW" else "JPG"
             Log.d(
                 TAG,
-                "Benchmark [$modeName]: shutter=${shutterLatency}ms, convert=${conversionTime}ms, save=${saveTime}ms, total=${totalLatency}ms",
+                "Benchmark [$modeName]: shutter=${shutterLatency}ms, convert=${conversionTime}ms, " +
+                    "save=${saveTime}ms, total=${totalLatency}ms",
             )
 
             synchronized(captureLock) {
@@ -1860,9 +1886,10 @@ class CameraController(
     private fun yuvToJpeg(
         image: Image,
         grayscale: Boolean = false,
+        softenHighlights: Boolean = false,
     ): ByteArray? =
         try {
-            val yuvBytes = yuv420ToNv21(image, grayscale)
+            val yuvBytes = yuv420ToNv21(image, grayscale, softenHighlights)
             val yuvImage =
                 android.graphics.YuvImage(
                     yuvBytes,
@@ -1887,6 +1914,7 @@ class CameraController(
     private fun yuv420ToNv21(
         image: Image,
         grayscale: Boolean = false,
+        softenHighlights: Boolean = false,
     ): ByteArray {
         val width = image.width
         val height = image.height
@@ -1904,6 +1932,9 @@ class CameraController(
 
         if (grayscale) {
             copyYPlane(yPlane.buffer, nv21, width, height, yRowStride)
+            if (softenHighlights) {
+                applySoftHighlightLumaCurve(nv21, ySize)
+            }
             java.util.Arrays.fill(nv21, ySize, nv21.size, 128.toByte())
             return nv21
         }
@@ -1931,7 +1962,47 @@ class CameraController(
         yFuture.get()
         uvFuture.get()
 
+        if (softenHighlights) {
+            applySoftHighlightLumaCurve(nv21, ySize)
+        }
+
         return nv21
+    }
+
+    private fun applySoftHighlightLumaCurve(
+        nv21: ByteArray,
+        ySize: Int,
+    ) {
+        for (i in 0 until ySize) {
+            nv21[i] = mapSoftHighlightLuma(nv21[i].toInt() and 0xFF).toByte()
+        }
+    }
+
+    private fun mapSoftHighlightLuma(y: Int): Int {
+        val x = y / 255f
+        val adjusted =
+            when {
+                x <= 0.15f -> interpolate(x, 0f, 0.15f, 0f, 0.14f)
+                x <= 0.30f -> interpolate(x, 0.15f, 0.30f, 0.14f, 0.28f)
+                x <= 0.45f -> interpolate(x, 0.30f, 0.45f, 0.28f, 0.42f)
+                x <= 0.60f -> interpolate(x, 0.45f, 0.60f, 0.42f, 0.56f)
+                x <= 0.75f -> interpolate(x, 0.60f, 0.75f, 0.56f, 0.68f)
+                x <= 0.88f -> interpolate(x, 0.75f, 0.88f, 0.68f, 0.79f)
+                x <= 0.97f -> interpolate(x, 0.88f, 0.97f, 0.79f, 0.87f)
+                else -> interpolate(x, 0.97f, 1f, 0.87f, 1f)
+            }
+        return (adjusted * 255f).roundToInt().coerceIn(0, 255)
+    }
+
+    private fun interpolate(
+        x: Float,
+        x0: Float,
+        x1: Float,
+        y0: Float,
+        y1: Float,
+    ): Float {
+        val t = ((x - x0) / (x1 - x0)).coerceIn(0f, 1f)
+        return y0 + (y1 - y0) * t
     }
 
     private fun copyYPlane(
